@@ -2,7 +2,7 @@ package com.campdf.app
 
 import java.io.File
 
-enum class FilterMode { ORIGINAL, MAGIC, BW, GRAY, LIGHTEN }
+enum class FilterMode { ORIGINAL, MAGIC, ENHANCE, NO_SHADOW, BW, GRAY, LIGHTEN }
 
 enum class Screen { Welcome, Home, Camera, Crop, Review, SignPad, SignPlace, Export, Settings }
 

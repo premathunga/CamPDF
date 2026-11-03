@@ -47,6 +47,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var themeMode by mutableIntStateOf(prefs.theme)
     var defaultQuality by mutableIntStateOf(prefs.quality)
     var autoDetect by mutableStateOf(prefs.autoDetect)
+    var snapA4 by mutableStateOf(prefs.snapA4)
     var appLock by mutableStateOf(prefs.appLock)
 
     private var idCounter = System.currentTimeMillis()
@@ -173,7 +174,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val result = withContext(Dispatchers.Default) {
                 runCatching {
                     val src = Imaging.loadOriented(raw, 3600) ?: error("load")
-                    val warped = Imaging.warp(src, c, 3508)
+                    val warped = Imaging.warp(src, c, 3508, snapA4)
                     src.recycle()
                     val id = idCounter++
                     val f = File(cache, "page_$id.jpg")
@@ -374,5 +375,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setTheme(v: Int) { themeMode = v; prefs.theme = v }
     fun updateDefaultQuality(v: Int) { defaultQuality = v; prefs.quality = v }
     fun updateAutoDetect(v: Boolean) { autoDetect = v; prefs.autoDetect = v }
+    fun updateSnapA4(v: Boolean) { snapA4 = v; prefs.snapA4 = v }
     fun updateAppLock(v: Boolean) { appLock = v; prefs.appLock = v }
 }

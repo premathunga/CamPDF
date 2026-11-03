@@ -46,6 +46,8 @@
     <string name="create_pdf">PDF සාදන්න (%1$d)</string>
     <string name="filter_original">මුල්</string>
     <string name="filter_magic">Magic</string>
+    <string name="filter_enhance">පැහැදිලි</string>
+    <string name="filter_no_shadow">සෙවණැලි නැත</string>
     <string name="filter_bw">කළු-සුදු</string>
     <string name="filter_gray">අළු</string>
     <string name="filter_lighten">ආලෝකමත්</string>
@@ -79,6 +81,8 @@
     <string name="quality_compact_d">දිගු ලේඛන සඳහා කුඩාම ගොනු</string>
     <string name="auto_detect">දාර ස්වයංක්‍රීයව හඳුනාගන්න</string>
     <string name="auto_detect_d">සෑම ඡායාරූපයකටම පසු ලේඛනයේ දාර සොයයි</string>
+    <string name="snap_a4">A4 ලෙස සකසන්න</string>
+    <string name="snap_a4_d">A4 ට ආසන්න පිටු නිවැරදි A4 අනුපාතයට හරවයි</string>
     <string name="app_lock">යෙදුම් අගුල</string>
     <string name="app_lock_d">CamPDF විවෘත කිරීමට ඇඟිලි සලකුණ හෝ තිර අගුල අවශ්‍යයි</string>
     <string name="app_lock_unavailable">පළමුව දුරකථන සැකසුම්වල ඇඟිලි සලකුණ හෝ තිර අගුලක් සකසන්න.</string>

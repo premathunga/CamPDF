@@ -186,6 +186,8 @@ private fun filterLabel(mode: FilterMode): String = stringResource(
     when (mode) {
         FilterMode.ORIGINAL -> R.string.filter_original
         FilterMode.MAGIC -> R.string.filter_magic
+        FilterMode.ENHANCE -> R.string.filter_enhance
+        FilterMode.NO_SHADOW -> R.string.filter_no_shadow
         FilterMode.BW -> R.string.filter_bw
         FilterMode.GRAY -> R.string.filter_gray
         FilterMode.LIGHTEN -> R.string.filter_lighten
