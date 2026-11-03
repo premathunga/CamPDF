@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">CamPDF</string>
     <string name="welcome_sub">Secure on-device scanner &amp; PDF maker</string>
-    <string name="w1_t">100% Offline</string>
+    <string name="w1_t" formatted="false">100% Offline</string>
     <string name="w1_d">CamPDF has no internet permission. Nothing is ever uploaded.</string>
     <string name="w2_t">Private &amp; sealed</string>
     <string name="w2_d">Your documents, signatures and letterheads never leave your phone.</string>

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="welcome_sub">பாதுகாப்பான ஆஃப்லைன் ஸ்கேனர் &amp; PDF உருவாக்கி</string>
-    <string name="w1_t">100% ஆஃப்லைன்</string>
+    <string name="w1_t" formatted="false">100% ஆஃப்லைன்</string>
     <string name="w1_d">CamPDF-க்கு இணைய அனுமதி இல்லை. எதுவும் பதிவேற்றப்படுவதில்லை.</string>
     <string name="w2_t">தனிப்பட்டது &amp; பாதுகாப்பானது</string>
     <string name="w2_d">உங்கள் ஆவணங்கள், கையொப்பங்கள் மற்றும் கடிதத் தலைப்புகள் உங்கள் தொலைபேசியை விட்டு வெளியேறாது.</string>

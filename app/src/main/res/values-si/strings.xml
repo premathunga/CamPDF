@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="welcome_sub">සුරක්ෂිත, උපාංගය තුළම ක්‍රියාත්මක ස්කෑනරය සහ PDF සාදනය</string>
-    <string name="w1_t">100% නොබැඳි (Offline)</string>
+    <string name="w1_t" formatted="false">100% නොබැඳි (Offline)</string>
     <string name="w1_d">CamPDF හට අන්තර්ජාල අවසරයක් නැත. කිසිවක් කිසි විටෙකත් උඩුගත නොවේ.</string>
     <string name="w2_t">පෞද්ගලික සහ ආරක්ෂිත</string>
     <string name="w2_d">ඔබේ ලේඛන, අත්සන් සහ ලිපි ශීර්ෂ ඔබේ දුරකථනයෙන් පිටතට නොයයි.</string>

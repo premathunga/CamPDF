@@ -30,19 +30,44 @@ jobs:
             echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
           fi
 
-      - name: Build debug + release APKs
+      - name: Build debug APK
+        run: |
+          set -o pipefail
+          gradle assembleDebug --no-daemon --stacktrace 2>&1 | tee build-debug.log
+
+      - name: Show compile errors (if any)
+        if: failure()
+        run: |
+          echo "=== Kotlin / resource errors ==="
+          grep -nE "^e: |error:|What went wrong|Execution failed|Could not " -A4 build-debug.log | head -120 || true
+
+      - name: Build release APK
+        continue-on-error: true
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: gradle assembleDebug assembleRelease --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon --stacktrace 2>&1 | tee build-release.log
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: CamPDF-release-apk
-          path: app/build/outputs/apk/release/*.apk
+          name: build-logs
+          path: build-*.log
+          if-no-files-found: ignore
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
         with:
           name: CamPDF-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CamPDF-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: ignore
