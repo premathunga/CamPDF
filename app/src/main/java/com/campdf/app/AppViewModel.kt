@@ -372,7 +372,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ---------- settings ----------
 
     fun setTheme(v: Int) { themeMode = v; prefs.theme = v }
-    fun setDefaultQuality(v: Int) { defaultQuality = v; prefs.quality = v }
-    fun setAutoDetect(v: Boolean) { autoDetect = v; prefs.autoDetect = v }
-    fun setAppLock(v: Boolean) { appLock = v; prefs.appLock = v }
+    fun updateDefaultQuality(v: Int) { defaultQuality = v; prefs.quality = v }
+    fun updateAutoDetect(v: Boolean) { autoDetect = v; prefs.autoDetect = v }
+    fun updateAppLock(v: Boolean) { appLock = v; prefs.appLock = v }
 }

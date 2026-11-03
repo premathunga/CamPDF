@@ -93,21 +93,21 @@ fun SettingsScreen(vm: AppViewModel) {
                 Column(Modifier.padding(16.dp)) {
                     Label(stringResource(R.string.default_quality))
                     Spacer(Modifier.height(6.dp))
-                    QualityRow(vm.defaultQuality == 0, stringResource(R.string.quality_high), stringResource(R.string.quality_high_d)) { vm.setDefaultQuality(0) }
-                    QualityRow(vm.defaultQuality == 1, stringResource(R.string.quality_bal), stringResource(R.string.quality_bal_d)) { vm.setDefaultQuality(1) }
-                    QualityRow(vm.defaultQuality == 2, stringResource(R.string.quality_compact), stringResource(R.string.quality_compact_d)) { vm.setDefaultQuality(2) }
+                    QualityRow(vm.defaultQuality == 0, stringResource(R.string.quality_high), stringResource(R.string.quality_high_d)) { vm.updateDefaultQuality(0) }
+                    QualityRow(vm.defaultQuality == 1, stringResource(R.string.quality_bal), stringResource(R.string.quality_bal_d)) { vm.updateDefaultQuality(1) }
+                    QualityRow(vm.defaultQuality == 2, stringResource(R.string.quality_compact), stringResource(R.string.quality_compact_d)) { vm.updateDefaultQuality(2) }
                 }
             }
 
             AppCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                    SwitchRow(stringResource(R.string.auto_detect), stringResource(R.string.auto_detect_d), vm.autoDetect) { vm.setAutoDetect(it) }
+                    SwitchRow(stringResource(R.string.auto_detect), stringResource(R.string.auto_detect_d), vm.autoDetect) { vm.updateAutoDetect(it) }
                     SwitchRow(stringResource(R.string.app_lock), stringResource(R.string.app_lock_d), vm.appLock) { want ->
                         if (!want) {
-                            vm.setAppLock(false)
+                            vm.updateAppLock(false)
                         } else {
                             val ok = BiometricManager.from(ctx).canAuthenticate(authenticators()) == BiometricManager.BIOMETRIC_SUCCESS
-                            if (ok) vm.setAppLock(true)
+                            if (ok) vm.updateAppLock(true)
                             else Toast.makeText(ctx, R.string.app_lock_unavailable, Toast.LENGTH_LONG).show()
                         }
                     }
