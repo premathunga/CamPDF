@@ -4,6 +4,7 @@ import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -395,7 +396,21 @@ object DocDetect {
             if (sqrt(dx * dx + dy * dy) < minSide) return null
         }
         val es = edgeScore(ex, mag, w, h)
-        val score = 0.5f * es + 0.3f * fill + 0.2f * min(1f, areaFrac / 0.6f)
+        // Documents may be portrait or landscape. Penalize implausibly narrow slivers,
+        // but keep IDs, receipts and near-square forms eligible.
+        val qw = (sqrt((ex[0].x - ex[1].x).pow(2) + (ex[0].y - ex[1].y).pow(2)) +
+            sqrt((ex[3].x - ex[2].x).pow(2) + (ex[3].y - ex[2].y).pow(2))) / 2f
+        val qh = (sqrt((ex[0].x - ex[3].x).pow(2) + (ex[0].y - ex[3].y).pow(2)) +
+            sqrt((ex[1].x - ex[2].x).pow(2) + (ex[1].y - ex[2].y).pow(2))) / 2f
+        val ratio = qw / qh.coerceAtLeast(1f)
+        val shapeScore = when {
+            ratio in 0.35f..2.8f -> 1f
+            ratio < 0.35f -> (ratio / 0.35f).coerceIn(0f, 1f)
+            else -> (2.8f / ratio).coerceIn(0f, 1f)
+        }
+        // Favor candidates with a clear boundary and a plausible page shape.
+        val score = 0.42f * es + 0.28f * fill +
+            0.20f * min(1f, areaFrac / 0.6f) + 0.10f * shapeScore
         val out = FloatArray(8)
         for (i in 0 until 4) {
             out[2 * i] = ((ex[i].x + 0.5f) / w).coerceIn(0f, 1f)

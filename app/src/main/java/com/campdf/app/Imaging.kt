@@ -134,26 +134,58 @@ object Imaging {
     }
 
     /** corners: normalized TL,TR,BR,BL. Returns an upright, de-skewed bitmap with the true page proportions. */
+    /**
+     * Perspective-correct a document quadrilateral. Corner coordinates are normalized TL,TR,BR,BL.
+     * Reject malformed/degenerate input before asking Android's Matrix for a homography; this
+     * avoids tiny/zero sized output bitmaps and unstable transforms from accidental corner crossing.
+     */
     fun warp(src: Bitmap, corners: FloatArray, maxOut: Int): Bitmap {
-        val pts = FloatArray(8) { if (it % 2 == 0) corners[it] * src.width else corners[it] * src.height }
-        fun d(i: Int, j: Int) = hypot(pts[2 * i] - pts[2 * j], pts[2 * i + 1] - pts[2 * j + 1])
-        var w = max(d(0, 1), d(3, 2))
-        var h = max(d(0, 3), d(1, 2))
-        if (w < 8f) w = 8f
-        if (h < 8f) h = 8f
-        val a = estimateAspect(pts, src.width, src.height)
-        if (a != null) {
-            val hEst = (w / a).toFloat()
-            if (hEst > h * 0.6f && hEst < h * 1.8f) h = hEst
+        require(maxOut >= 256) { "Output resolution is too small" }
+        val fallback = floatArrayOf(0.02f, 0.02f, 0.98f, 0.02f, 0.98f, 0.98f, 0.02f, 0.98f)
+        val c = if (corners.size == 8 && corners.all { it.isFinite() }) corners else fallback
+        val normalized = FloatArray(8) { c[it].coerceIn(0f, 1f) }
+        val pts = FloatArray(8) {
+            if (it % 2 == 0) normalized[it] * (src.width - 1) else normalized[it] * (src.height - 1)
         }
-        val scale = min(1f, maxOut / max(w, h))
+
+        fun cross(i: Int, j: Int, k: Int): Float {
+            val ax = pts[2 * j] - pts[2 * i]
+            val ay = pts[2 * j + 1] - pts[2 * i + 1]
+            val bx = pts[2 * k] - pts[2 * j]
+            val by = pts[2 * k + 1] - pts[2 * j + 1]
+            return ax * by - ay * bx
+        }
+        val turns = (0..3).map { cross(it, (it + 1) % 4, (it + 2) % 4) }
+        val convex = turns.all { it > 0f } || turns.all { it < 0f }
+        val area = abs(
+            (0..3).sumOf { i ->
+                val j = (i + 1) % 4
+                (pts[2 * i] * pts[2 * j + 1] - pts[2 * j] * pts[2 * i + 1]).toDouble()
+            }
+        ) / 2.0
+        val safePts = if (convex && area >= src.width.toDouble() * src.height * 0.025) pts else
+            FloatArray(8) { if (it % 2 == 0) fallback[it] * (src.width - 1) else fallback[it] * (src.height - 1) }
+
+        fun d(i: Int, j: Int) = hypot(safePts[2 * i] - safePts[2 * j], safePts[2 * i + 1] - safePts[2 * j + 1])
+        var w = ((d(0, 1) + d(3, 2)) / 2f).coerceAtLeast(8f)
+        var h = ((d(0, 3) + d(1, 2)) / 2f).coerceAtLeast(8f)
+        val a = estimateAspect(safePts, src.width, src.height)
+        if (a != null && a in 0.20..5.0) {
+            val hEst = (w / a).toFloat()
+            if (hEst in (h * 0.75f)..(h * 1.33f)) h = hEst
+        }
+        val scale = min(1f, maxOut.toFloat() / max(w, h))
         val ow = (w * scale).roundToInt().coerceAtLeast(1)
         val oh = (h * scale).roundToInt().coerceAtLeast(1)
         val out = Bitmap.createBitmap(ow, oh, Bitmap.Config.ARGB_8888)
+        out.eraseColor(android.graphics.Color.WHITE)
         val dst = floatArrayOf(0f, 0f, ow.toFloat(), 0f, ow.toFloat(), oh.toFloat(), 0f, oh.toFloat())
         val m = Matrix()
-        m.setPolyToPoly(pts, 0, dst, 0, 4)
-        Canvas(out).drawBitmap(src, m, Paint(Paint.FILTER_BITMAP_FLAG))
+        if (!m.setPolyToPoly(safePts, 0, dst, 0, 4)) {
+            out.recycle()
+            return Bitmap.createScaledBitmap(src, ow, oh, true)
+        }
+        Canvas(out).drawBitmap(src, m, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
         return out
     }
 
@@ -293,10 +325,16 @@ object Imaging {
         }
         var lo = 0f
         var hi = 255f
-        if (mode == FilterMode.ENHANCE) {
+        var bwThreshold = 157.5f
+        if (mode == FilterMode.ENHANCE || mode == FilterMode.BW) {
+            // Robust percentile levels make both contrast enhancement and BW conversion adapt
+            // to dim captures, aged paper and documents with different ink/paper densities.
             val p = levels(src)
             lo = p.first
             hi = p.second
+            if (mode == FilterMode.BW) {
+                bwThreshold = (lo + (hi - lo) * 0.58f).coerceIn(95f, 220f)
+            }
         }
         val levelScale = 255f / (hi - lo).coerceAtLeast(40f)
         val x0 = IntArray(w)
@@ -385,7 +423,9 @@ object Imaging {
                     val r2 = sharpenCh(c, up, dn, lf, rt, 16, sharp)
                     val o = (j - 1) * w + x
                     if (mode == FilterMode.BW) {
-                        val t = ((r2 - 115f) / (200f - 115f)).coerceIn(0f, 1f)
+                        // Soft transition around an image-adaptive threshold preserves thin
+                        // handwriting better than a fixed global cutoff.
+                        val t = ((r2 - (bwThreshold - 36f)) / 72f).coerceIn(0f, 1f)
                         val v = (255f * t * t * (3f - 2f * t)).toInt()
                         outBuf[o] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v
                     } else {
