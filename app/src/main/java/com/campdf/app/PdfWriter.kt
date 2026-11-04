@@ -81,7 +81,18 @@ object PdfWriter {
                 out.write(p.jpeg)
                 w("\nendstream\nendobj\n")
 
-                val cs = "q ${f(pw)} 0 0 ${f(ph)} 0 0 cm /Im0 Do Q\n"
+                // Fit the image inside the page without distortion (the A4 snap can differ from the
+                // scan's real proportions by a few percent -> letterbox instead of stretching).
+                val imgAspect = p.width.toFloat() / p.height.coerceAtLeast(1)
+                var dw = pw
+                var dh = pw / imgAspect
+                if (dh > ph) {
+                    dh = ph
+                    dw = ph * imgAspect
+                }
+                val ox = (pw - dw) / 2f
+                val oy = (ph - dh) / 2f
+                val cs = "q ${f(dw)} 0 0 ${f(dh)} ${f(ox)} ${f(oy)} cm /Im0 Do Q\n"
                 offsets[cont] = out.count
                 w("$cont 0 obj\n<< /Length ${cs.length} >>\nstream\n$cs" + "endstream\nendobj\n")
 

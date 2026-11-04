@@ -2,6 +2,7 @@ package com.campdf.app
 
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
@@ -423,19 +424,39 @@ object DocDetect {
         val es = edgeScore(ex, mag, w, h)
         // Documents may be portrait or landscape. Penalize implausibly narrow slivers,
         // but keep IDs, receipts and near-square forms eligible.
-        val qw = (sqrt((ex[0].x - ex[1].x).pow(2) + (ex[0].y - ex[1].y).pow(2)) +
-            sqrt((ex[3].x - ex[2].x).pow(2) + (ex[3].y - ex[2].y).pow(2))) / 2f
-        val qh = (sqrt((ex[0].x - ex[3].x).pow(2) + (ex[0].y - ex[3].y).pow(2)) +
-            sqrt((ex[1].x - ex[2].x).pow(2) + (ex[1].y - ex[2].y).pow(2))) / 2f
+        val wTop = hypot(ex[1].x - ex[0].x, ex[1].y - ex[0].y)
+        val wBot = hypot(ex[2].x - ex[3].x, ex[2].y - ex[3].y)
+        val hLeft = hypot(ex[3].x - ex[0].x, ex[3].y - ex[0].y)
+        val hRight = hypot(ex[2].x - ex[1].x, ex[2].y - ex[1].y)
+
+        val wRatio = min(wTop, wBot) / max(wTop, wBot).coerceAtLeast(1e-4f)
+        val hRatio = min(hLeft, hRight) / max(hLeft, hRight).coerceAtLeast(1e-4f)
+        val opposingRatio = min(wRatio, hRatio)
+        val symmetryScore = when {
+            opposingRatio >= 0.70f -> 1f
+            opposingRatio < 0.50f -> 0.1f
+            else -> (opposingRatio - 0.50f) / 0.20f
+        }
+
+        val qw = (wTop + wBot) / 2f
+        val qh = (hLeft + hRight) / 2f
         val ratio = qw / qh.coerceAtLeast(1f)
-        val shapeScore = when {
+        val aspectScore = when {
             ratio in 0.35f..2.8f -> 1f
             ratio < 0.35f -> (ratio / 0.35f).coerceIn(0f, 1f)
             else -> (2.8f / ratio).coerceIn(0f, 1f)
         }
-        // Favor candidates with a clear boundary and a plausible page shape.
-        val score = 0.42f * es + 0.28f * fill +
-            0.20f * min(1f, areaFrac / 0.6f) + 0.10f * shapeScore
+        // Favor candidates with a clear boundary, planar symmetry, and a plausible page shape.
+        val shapeScore = aspectScore * symmetryScore
+        var score = 0.40f * es + 0.25f * fill +
+            0.20f * min(1f, areaFrac / 0.6f) + 0.15f * shapeScore
+        // A real page photographed with some margin does not touch the frame at its corners; a quad whose
+        // corners sit on the frame edge is typically the page merged with a bright background (e.g. a striped cloth).
+        var onFrame = 0
+        for (p in ex) {
+            if (p.x <= 0.015f * w || p.y <= 0.015f * h || p.x >= 0.985f * w || p.y >= 0.985f * h) onFrame++
+        }
+        score *= 0.85f.pow(onFrame)
         val out = FloatArray(8)
         for (i in 0 until 4) {
             out[2 * i] = ((ex[i].x + 0.5f) / w).coerceIn(0f, 1f)

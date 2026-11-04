@@ -186,6 +186,72 @@ object Imaging {
             return Bitmap.createScaledBitmap(src, ow, oh, true)
         }
         Canvas(out).drawBitmap(src, m, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
+        return trimBorders(out)
+    }
+
+    /**
+     * Removes thin strips of background (table / cloth) that remain along the borders after the crop,
+     * e.g. from torn or folded page edges. Trims at most 5% per side and only when the page itself is light.
+     */
+    private fun trimBorders(bm: Bitmap): Bitmap {
+        val w = bm.width
+        val h = bm.height
+        if (w < 300 || h < 300) return bm
+        val f = max(1, max(w, h) / 600)
+        val sw = w / f
+        val sh = h / f
+        val small = Bitmap.createScaledBitmap(bm, sw, sh, true)
+        val px = IntArray(sw * sh)
+        small.getPixels(px, 0, sw, 0, 0, sw, sh)
+        if (small !== bm) small.recycle()
+        val lum = IntArray(px.size) { luma(px[it]).toInt() }
+        val hist = IntArray(256)
+        var cnt = 0
+        for (y in sh / 4 until sh * 3 / 4) {
+            for (x in sw / 4 until sw * 3 / 4) {
+                hist[lum[y * sw + x].coerceIn(0, 255)]++
+                cnt++
+            }
+        }
+        var acc = 0
+        var ref = 255
+        for (i in 0..255) {
+            acc += hist[i]
+            if (acc >= cnt * 0.7f) { ref = i; break }
+        }
+        if (ref < 110) return bm
+        val thr = ref * 0.62f
+        val maxT = max(2, (min(sw, sh) * 0.05f).toInt())
+        fun rowFrac(y: Int): Float {
+            var n = 0
+            for (x in 0 until sw) if (lum[y * sw + x] < thr) n++
+            return n.toFloat() / sw
+        }
+        fun colFrac(x: Int): Float {
+            var n = 0
+            for (y in 0 until sh) if (lum[y * sw + x] < thr) n++
+            return n.toFloat() / sh
+        }
+        var top = 0
+        while (top < maxT && rowFrac(top) > 0.10f) top++
+        var bottom = 0
+        while (bottom < maxT && rowFrac(sh - 1 - bottom) > 0.10f) bottom++
+        var left = 0
+        while (left < maxT && colFrac(left) > 0.10f) left++
+        var right = 0
+        while (right < maxT && colFrac(sw - 1 - right) > 0.10f) right++
+        if (top + bottom + left + right == 0) return bm
+        if (top > 0) top++
+        if (bottom > 0) bottom++
+        if (left > 0) left++
+        if (right > 0) right++
+        val l = left * f
+        val t = top * f
+        val nw = w - l - right * f
+        val nh = h - t - bottom * f
+        if (nw < w / 2 || nh < h / 2) return bm
+        val out = Bitmap.createBitmap(bm, l, t, nw, nh)
+        if (out !== bm) bm.recycle()
         return out
     }
 
