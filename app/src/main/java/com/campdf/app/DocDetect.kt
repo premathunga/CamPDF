@@ -41,6 +41,11 @@ object DocDetect {
         val mag = sobel(g, w, h)
 
         val cands = ArrayList<Cand>()
+        val chroma = chromaMask(px, g, w, h)
+        if (chroma != null) {
+            val c = evaluate(chroma, w, h, mag, 0f)
+            if (c != null) cands.add(c)
+        }
         val bright = brightMask(g, w, h)
         if (bright != null) {
             val c = evaluate(bright, w, h, mag, 0f)
@@ -123,6 +128,26 @@ object DocDetect {
     }
 
     // ---------- segmentation ----------
+
+    /** Paper is neutral (low saturation), while colored tables/bedsheets have significant chroma. */
+    private fun chromaMask(px: IntArray, g: FloatArray, w: Int, h: Int): BooleanArray? {
+        val total = w * h
+        var count = 0
+        val mask = BooleanArray(total) { i ->
+            val p = px[i]
+            val r = (p shr 16) and 255
+            val gr = (p shr 8) and 255
+            val b = p and 255
+            val maxC = max(r, max(gr, b))
+            val minC = min(r, min(gr, b))
+            val sat = if (maxC > 0) (maxC - minC).toFloat() / maxC else 0f
+            val isPaper = sat < 0.38f && g[i] > 48f
+            if (isPaper) count++
+            isPaper
+        }
+        val frac = count.toFloat() / total
+        return if (frac in 0.10f..0.96f) mask else null
+    }
 
     private fun brightMask(g: FloatArray, w: Int, h: Int): BooleanArray? {
         val total = w * h
