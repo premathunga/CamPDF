@@ -218,35 +218,88 @@ object Imaging {
 
     private fun dilateF(a: FloatArray, w: Int, h: Int, r: Int): FloatArray {
         val out = FloatArray(a.size)
-        for (y in 0 until h) for (x in 0 until w) {
-            var m = 0f
-            for (yy in max(0, y - r)..min(h - 1, y + r)) for (xx in max(0, x - r)..min(w - 1, x + r)) {
-                val v = a[yy * w + xx]
-                if (v > m) m = v
+        for (y in 0 until h) {
+            val yMin = max(0, y - r)
+            val yMax = min(h - 1, y + r)
+            for (x in 0 until w) {
+                val xMin = max(0, x - r)
+                val xMax = min(w - 1, x + r)
+                var m = 0f
+                for (yy in yMin..yMax) {
+                    val row = yy * w
+                    for (xx in xMin..xMax) {
+                        val v = a[row + xx]
+                        if (v > m) m = v
+                    }
+                }
+                out[y * w + x] = m
             }
-            out[y * w + x] = m
         }
         return out
     }
 
-    private fun boxBlur(a: FloatArray, w: Int, h: Int, r: Int): FloatArray {
+    private fun erodeF(a: FloatArray, w: Int, h: Int, r: Int): FloatArray {
         val out = FloatArray(a.size)
-        for (y in 0 until h) for (x in 0 until w) {
-            var s = 0f
-            var n = 0
-            for (yy in max(0, y - r)..min(h - 1, y + r)) for (xx in max(0, x - r)..min(w - 1, x + r)) {
-                s += a[yy * w + xx]
-                n++
+        for (y in 0 until h) {
+            val yMin = max(0, y - r)
+            val yMax = min(h - 1, y + r)
+            for (x in 0 until w) {
+                val xMin = max(0, x - r)
+                val xMax = min(w - 1, x + r)
+                var m = 255f
+                for (yy in yMin..yMax) {
+                    val row = yy * w
+                    for (xx in xMin..xMax) {
+                        val v = a[row + xx]
+                        if (v < m) m = v
+                    }
+                }
+                out[y * w + x] = m
             }
-            out[y * w + x] = s / n
+        }
+        return out
+    }
+
+    private fun boxBlurSeparable(a: FloatArray, w: Int, h: Int, r: Int): FloatArray {
+        val tmp = FloatArray(a.size)
+        val out = FloatArray(a.size)
+        for (y in 0 until h) {
+            val row = y * w
+            for (x in 0 until w) {
+                val xMin = max(0, x - r)
+                val xMax = min(w - 1, x + r)
+                var sum = 0f
+                var cnt = 0
+                for (xx in xMin..xMax) {
+                    sum += a[row + xx]
+                    cnt++
+                }
+                tmp[row + x] = sum / cnt
+            }
+        }
+        for (x in 0 until w) {
+            for (y in 0 until h) {
+                val yMin = max(0, y - r)
+                val yMax = min(h - 1, y + r)
+                var sum = 0f
+                var cnt = 0
+                for (yy in yMin..yMax) {
+                    sum += tmp[yy * w + x]
+                    cnt++
+                }
+                out[y * w + x] = sum / cnt
+            }
         }
         return out
     }
 
     /** Estimates the paper brightness per area (ignoring the text) at low resolution -> shadow map. */
     private fun backgroundMap(src: Bitmap): Triple<FloatArray, Int, Int> {
-        val sw = (src.width / 20).coerceAtLeast(6)
-        val sh = (src.height / 20).coerceAtLeast(6)
+        val maxDim = 120
+        val longest = max(src.width, src.height)
+        val scale = if (longest > maxDim) maxDim.toFloat() / longest else 1f
+        val sw = (src.width * scale).roundToInt().coerceAtLeast(16)
+        val sh = (src.height * scale).roundToInt().coerceAtLeast(16)
         var cur = src
         while (cur.width / 2 >= sw * 2 && cur.height / 2 >= sh * 2) {
             val next = Bitmap.createScaledBitmap(cur, cur.width / 2, cur.height / 2, true)
@@ -259,9 +312,11 @@ object Imaging {
         small.getPixels(px, 0, sw, 0, 0, sw, sh)
         if (small !== src) small.recycle()
         var lum = FloatArray(sw * sh) { luma(px[it]) }
-        lum = dilateF(lum, sw, sh, 2)   // removes dark text from the estimate
-        lum = boxBlur(lum, sw, sh, 3)
-        lum = boxBlur(lum, sw, sh, 3)
+        // Morphological closing: Dilation removes dark text/lines, Erosion restores true paper boundary
+        lum = dilateF(lum, sw, sh, 3)
+        lum = erodeF(lum, sw, sh, 1)
+        lum = boxBlurSeparable(lum, sw, sh, 2)
+        lum = boxBlurSeparable(lum, sw, sh, 2)
         return Triple(lum, sw, sh)
     }
 
@@ -294,8 +349,8 @@ object Imaging {
         return Pair(pct(0.005f), pct(0.97f))
     }
 
-    private val WHITEN_LUT = IntArray(256) { i ->
-        (255.0 * (i / 240.0).coerceIn(0.0, 1.0).pow(1.4)).toInt().coerceIn(0, 255)
+    private val CONTRAST_LUT = FloatArray(256) { i ->
+        (255f * (i / 255f).pow(1.35f))
     }
 
     private fun sharpenCh(c: Int, u: Int, d: Int, l: Int, r: Int, shift: Int, amt: Float): Int {
@@ -388,25 +443,118 @@ object Imaging {
                         val fxx = fx[x]
                         val top = bg[rowA + xi] * (1 - fxx) + bg[rowA + xi + 1] * fxx
                         val bot = bg[rowB + xi] * (1 - fxx) + bg[rowB + xi + 1] * fxx
-                        k = 255f / (top * (1 - fy) + bot * fy).coerceAtLeast(50f)
+                        k = 255f / (top * (1 - fy) + bot * fy).coerceAtLeast(35f)
                     }
                     var rr: Int
                     var gg: Int
                     var bb: Int
                     when (mode) {
                         FilterMode.NO_SHADOW -> {
-                            rr = WHITEN_LUT[(r * k).toInt().coerceIn(0, 255)]
-                            gg = WHITEN_LUT[(g * k).toInt().coerceIn(0, 255)]
-                            bb = WHITEN_LUT[(b * k).toInt().coerceIn(0, 255)]
+                            val rk = (r * k).coerceIn(0f, 255f)
+                            val gk = (g * k).coerceIn(0f, 255f)
+                            val bk = (b * k).coerceIn(0f, 255f)
+                            val lk = rk * 0.299f + gk * 0.587f + bk * 0.114f
+
+                            val maxC = max(rk, max(gk, bk))
+                            val minC = min(rk, min(gk, bk))
+                            val chroma = maxC - minC
+
+                            // Blue ink detection (ballpoint pen handwriting & signatures)
+                            val isBlueInk = (bk - rk > 12f) && (bk - gk > 6f)
+                            val isColorInk = isBlueInk || (chroma > 18f)
+
+                            // Foreground ink weight: dark printed text, pencil, or colored ink
+                            val darkStrength = ((205f - lk) / 85f).coerceIn(0f, 1f)
+                            val colorStrength = if (isBlueInk) {
+                                ((bk - rk) / 24f).coerceIn(0.4f, 1f)
+                            } else if (chroma > 18f) {
+                                (chroma / 36f).coerceIn(0.3f, 1f)
+                            } else 0f
+                            val inkWeight = max(darkStrength, colorStrength)
+
+                            // Adaptive background whitening: clean paper background, wrinkles and folds
+                            val paperFloor = 175f
+                            val whiteBlend = if (inkWeight < 0.35f && lk >= paperFloor) {
+                                val t = ((lk - paperFloor) / (225f - paperFloor)).coerceIn(0f, 1f)
+                                (t * t * (3f - 2f * t)) * (1f - inkWeight / 0.35f)
+                            } else 0f
+
+                            var rOut = rk + (255f - rk) * whiteBlend
+                            var gOut = gk + (255f - gk) * whiteBlend
+                            var bOut = bk + (255f - bk) * whiteBlend
+
+                            // Text-aware contrast enhancement for handwriting & printed text
+                            if (inkWeight > 0.05f) {
+                                if (isBlueInk) {
+                                    // Deepen red & green to make blue handwriting vibrant and prevent washout
+                                    val rInk = rk * 0.72f
+                                    val gInk = gk * 0.84f
+                                    val bInk = min(255f, bk * 1.04f)
+                                    val iw = inkWeight
+                                    rOut = rOut * (1f - iw) + rInk * iw
+                                    gOut = gOut * (1f - iw) + gInk * iw
+                                    bOut = bOut * (1f - iw) + bInk * iw
+                                } else if (isColorInk) {
+                                    // Colored markings & stamps (red, purple, etc.)
+                                    val iw = inkWeight
+                                    val rInk = if (rk == maxC) min(255f, rk * 1.05f) else rk * 0.78f
+                                    val gInk = if (gk == maxC) min(255f, gk * 1.05f) else gk * 0.78f
+                                    val bInk = if (bk == maxC) min(255f, bk * 1.05f) else bk * 0.78f
+                                    rOut = rOut * (1f - iw) + rInk * iw
+                                    gOut = gOut * (1f - iw) + gInk * iw
+                                    bOut = bOut * (1f - iw) + bInk * iw
+                                } else {
+                                    // Black printed text: deepen darkness for punchy, crisp readability
+                                    if (lk < 210f) {
+                                        val darkL = CONTRAST_LUT[lk.toInt().coerceIn(0, 255)]
+                                        val gamma = darkL / max(lk, 1f)
+                                        val rDark = rk * gamma
+                                        val gDark = gk * gamma
+                                        val bDark = bk * gamma
+                                        val iw = inkWeight
+                                        rOut = rOut * (1f - iw) + rDark * iw
+                                        gOut = gOut * (1f - iw) + gDark * iw
+                                        bOut = bOut * (1f - iw) + bDark * iw
+                                    }
+                                }
+                            }
+                            rr = rOut.toInt().coerceIn(0, 255)
+                            gg = gOut.toInt().coerceIn(0, 255)
+                            bb = bOut.toInt().coerceIn(0, 255)
                         }
                         FilterMode.BW -> {
-                            val gv = ((r * 0.299f + g * 0.587f + b * 0.114f) * k).toInt().coerceIn(0, 255)
+                            val rk = (r * k).coerceIn(0f, 255f)
+                            val gk = (g * k).coerceIn(0f, 255f)
+                            val bk = (b * k).coerceIn(0f, 255f)
+                            val lk = rk * 0.299f + gk * 0.587f + bk * 0.114f
+
+                            val isBlue = (bk - rk > 12f) && (bk - gk > 6f)
+                            val inkVal = if (isBlue) {
+                                min(lk, rk * 0.72f + lk * 0.28f)
+                            } else if (max(rk, max(gk, bk)) - min(rk, min(gk, bk)) > 18f) {
+                                min(lk, min(rk, min(gk, bk)) * 0.7f + lk * 0.3f)
+                            } else {
+                                lk
+                            }
+                            val gv = inkVal.toInt().coerceIn(0, 255)
                             rr = gv; gg = gv; bb = gv
                         }
                         FilterMode.ENHANCE -> {
-                            rr = ((r - lo) * levelScale).toInt().coerceIn(0, 255)
-                            gg = ((g - lo) * levelScale).toInt().coerceIn(0, 255)
-                            bb = ((b - lo) * levelScale).toInt().coerceIn(0, 255)
+                            val re = ((r - lo) * levelScale).coerceIn(0f, 255f)
+                            val ge = ((g - lo) * levelScale).coerceIn(0f, 255f)
+                            val be = ((b - lo) * levelScale).coerceIn(0f, 255f)
+                            val le = re * 0.299f + ge * 0.587f + be * 0.114f
+                            if (le < 210f) {
+                                val darkL = CONTRAST_LUT[le.toInt().coerceIn(0, 255)]
+                                val gamma = darkL / max(le, 1f)
+                                rr = (re * gamma).toInt().coerceIn(0, 255)
+                                gg = (ge * gamma).toInt().coerceIn(0, 255)
+                                bb = (be * gamma).toInt().coerceIn(0, 255)
+                            } else {
+                                rr = re.toInt().coerceIn(0, 255)
+                                gg = ge.toInt().coerceIn(0, 255)
+                                bb = be.toInt().coerceIn(0, 255)
+                            }
                         }
                         else -> { rr = r; gg = g; bb = b }
                     }

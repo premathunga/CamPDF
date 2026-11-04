@@ -31,4 +31,12 @@ This source update focuses on the existing offline scanning pipeline:
 - **Image enhancement (Priority 2):** the BW filter threshold is derived from robust image percentile levels instead of relying on one fixed threshold. This is intended to adapt to dim captures and varied paper/ink density while retaining a soft transition for fine strokes. The existing local background/shadow estimation and color-preserving `NO_SHADOW` path remain offline.
 - **Perspective correction (Priority 3):** perspective warp now validates normalized corner input, checks convexity and minimum quadrilateral area, limits aspect-ratio correction, initializes output as white, and uses a safe fallback for invalid transform matrices.
 
+## CamPDF professional enhancement engine update (Priority 4)
+
+- **Adaptive illumination correction & local shadow removal:** Replaced the coarse background map with morphological closing (dilation $r=3$ + erosion $r=1$) and separable 2D box smoothing. This captures true paper illumination without halo artifacts around text blocks and normalizes harsh phone/hand shadows.
+- **Handwriting-preserving background whitening:** Blue ballpoint ink and signatures are detected via color chroma and red-channel absorption. Background whitening is applied selectively to low-chroma paper and fold creases, preventing blue signatures and handwriting from bleaching out.
+- **Text-aware contrast enhancement:** Dark printed text is deepened using a non-linear contrast curve (`CONTRAST_LUT`), and blue ballpoint ink is enriched by deepening complementary channels, producing vivid, crisp text and signatures.
+- **Paper fold removal:** Creases and folds with low chroma and near-paper luminance are smoothly whitened into pure paper white.
+- **Standardized PDF page sizing:** Near-A4 scanned documents snap to ISO 216 A4 page dimensions (595.28 x 841.89 pt) to eliminate jumping page sizes and ensure uniform printing.
+
 These are algorithmic improvements, not a claim of parity with CamScanner. Test on a range of real devices and document samples (white paper on bright/dark surfaces, receipts, folded sheets, handwritten forms, and landscape documents) before release. This environment did not have an Android SDK/Gradle build tool configured, so a compile/device test could not be run here.

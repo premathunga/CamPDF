@@ -43,15 +43,33 @@ object PdfWriter {
             offsets[2] = out.count
             w("2 0 obj\n<< /Type /Pages /Count $n /Kids [ $kids ] >>\nendobj\n")
 
-            val base = 595.28f
+            val a4W = 595.28f
+            val a4H = 841.89f
             for (i in 0 until n) {
                 val p = next(i)
                 val pw: Float
                 val ph: Float
-                if (p.height >= p.width) {
-                    pw = base; ph = base * p.height / p.width
+                val isPortrait = p.height >= p.width
+                val ratio = if (isPortrait) p.height.toFloat() / p.width.coerceAtLeast(1)
+                            else p.width.toFloat() / p.height.coerceAtLeast(1)
+                // Snap pages within standard A4 aspect tolerance (~6% of 1.414) to standard ISO A4 points.
+                // Arbitrary documents (receipts, cards) keep their proportional bounds.
+                if (ratio in 1.33f..1.50f) {
+                    if (isPortrait) {
+                        pw = a4W
+                        ph = a4H
+                    } else {
+                        pw = a4H
+                        ph = a4W
+                    }
                 } else {
-                    ph = base; pw = base * p.width / p.height
+                    if (isPortrait) {
+                        pw = a4W
+                        ph = a4W * p.height / p.width.coerceAtLeast(1)
+                    } else {
+                        ph = a4W
+                        pw = a4W * p.width / p.height.coerceAtLeast(1)
+                    }
                 }
                 val img = 3 + 3 * i
                 val cont = 4 + 3 * i
