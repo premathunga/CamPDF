@@ -15,7 +15,10 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -113,20 +116,13 @@ fun ReviewScreen(vm: AppViewModel) {
             }
         }
 
-        if (filterOpen) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+        if (filterOpen && page != null) {
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                for (mode in FilterMode.values()) {
-                    FilterChip(
-                        selected = page?.filter == mode,
-                        onClick = { vm.setFilter(mode) },
-                        label = { Text(filterLabel(mode)) }
-                    )
+                items(FilterMode.values().toList()) { mode ->
+                    FilterThumb(page, mode, page.filter == mode) { vm.setFilter(mode) }
                 }
             }
         }
@@ -156,7 +152,7 @@ fun ReviewScreen(vm: AppViewModel) {
         }
 
         PrimaryButton(
-            stringResource(R.string.create_pdf, pages.size),
+            if (vm.editingDoc != null) stringResource(R.string.save_changes) else stringResource(R.string.create_pdf, pages.size),
             Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
@@ -185,14 +181,41 @@ fun ReviewScreen(vm: AppViewModel) {
 private fun filterLabel(mode: FilterMode): String = stringResource(
     when (mode) {
         FilterMode.ORIGINAL -> R.string.filter_original
-        FilterMode.MAGIC -> R.string.filter_magic
-        FilterMode.ENHANCE -> R.string.filter_enhance
-        FilterMode.NO_SHADOW -> R.string.filter_no_shadow
-        FilterMode.BW -> R.string.filter_bw
-        FilterMode.GRAY -> R.string.filter_gray
         FilterMode.LIGHTEN -> R.string.filter_lighten
+        FilterMode.ENHANCE -> R.string.filter_enhance
+        FilterMode.NO_SHADOW -> R.string.filter_noshadow
+        FilterMode.BW -> R.string.filter_bw
     }
 )
+
+@Composable
+private fun FilterThumb(page: PageItem, mode: FilterMode, selected: Boolean, onClick: () -> Unit) {
+    val c = MaterialTheme.colorScheme
+    val img by rememberPageImage(page.copy(filter = mode), 200)
+    val shape = RoundedCornerShape(10.dp)
+    Column(
+        Modifier.clickable(onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            Modifier
+                .size(64.dp, 84.dp)
+                .clip(shape)
+                .background(c.surfaceContainerHigh)
+                .border(if (selected) 2.dp else 1.dp, if (selected) c.primary else c.outlineVariant, shape)
+        ) {
+            val im = img
+            if (im != null) Image(im, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            filterLabel(mode),
+            fontSize = 11.sp,
+            color = if (selected) c.primary else c.onSurfaceVariant,
+            maxLines = 1
+        )
+    }
+}
 
 @Composable
 private fun Thumb(page: PageItem, index: Int, selected: Boolean, onClick: () -> Unit) {

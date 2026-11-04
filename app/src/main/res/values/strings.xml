@@ -47,8 +47,6 @@
     <string name="create_pdf">Create PDF (%1$d)</string>
     <string name="filter_original">Original</string>
     <string name="filter_magic">Magic</string>
-    <string name="filter_enhance">Enhance</string>
-    <string name="filter_no_shadow">No shadow</string>
     <string name="filter_bw">B&amp;W</string>
     <string name="filter_gray">Gray</string>
     <string name="filter_lighten">Lighten</string>
@@ -82,8 +80,6 @@
     <string name="quality_compact_d">Smallest files for long documents</string>
     <string name="auto_detect">Auto-detect edges</string>
     <string name="auto_detect_d">Finds the document borders after each capture</string>
-    <string name="snap_a4">Straighten to A4</string>
-    <string name="snap_a4_d">Pages close to A4 shape are corrected to exact A4 proportions</string>
     <string name="app_lock">App lock</string>
     <string name="app_lock_d">Require fingerprint or screen lock to open CamPDF</string>
     <string name="app_lock_unavailable">Set up a fingerprint or screen lock in phone settings first.</string>
@@ -94,4 +90,9 @@
     <string name="unlock">Unlock</string>
     <string name="error_generic">Something went wrong</string>
     <string name="no_viewer">No app found to open PDF files</string>
+    <string name="edit_pages">Edit pages</string>
+    <string name="save_changes">Save changes</string>
+    <string name="filter_enhance">Enhance</string>
+    <string name="filter_noshadow">No shadow</string>
+    <string name="viewer_error">Could not open this PDF</string>
 </resources>

@@ -3,7 +3,9 @@ package com.campdf.app
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -42,12 +44,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var showDiscard by mutableStateOf(false)
     var exportQuality by mutableIntStateOf(prefs.quality)
     var signatureVersion by mutableIntStateOf(0)
+    var viewerDoc by mutableStateOf<DocItem?>(null)
+    var editingDoc by mutableStateOf<DocItem?>(null)
 
     // settings
     var themeMode by mutableIntStateOf(prefs.theme)
     var defaultQuality by mutableIntStateOf(prefs.quality)
     var autoDetect by mutableStateOf(prefs.autoDetect)
-    var snapA4 by mutableStateOf(prefs.snapA4)
     var appLock by mutableStateOf(prefs.appLock)
 
     private var idCounter = System.currentTimeMillis()
@@ -80,8 +83,57 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             Screen.Review -> if (pages.isEmpty()) screen = Screen.Home else showDiscard = true
             Screen.SignPad, Screen.SignPlace -> screen = Screen.Review
             Screen.Export -> screen = Screen.Review
+            Screen.Viewer -> screen = Screen.Home
             Screen.Settings -> screen = Screen.Home
             else -> Unit
+        }
+    }
+
+    // ---------- viewer / edit existing document ----------
+
+    fun openViewer(doc: DocItem) {
+        viewerDoc = doc
+        screen = Screen.Viewer
+    }
+
+    /** Re-opens a saved PDF for editing: every page is rendered back into an editable page. */
+    fun editDoc(doc: DocItem) {
+        clearSession()
+        viewModelScope.launch {
+            busy = true
+            val loaded = withContext(Dispatchers.IO) {
+                runCatching {
+                    val result = ArrayList<PageItem>()
+                    val pfd = ParcelFileDescriptor.open(doc.file, ParcelFileDescriptor.MODE_READ_ONLY)
+                    val renderer = PdfRenderer(pfd)
+                    try {
+                        for (i in 0 until renderer.pageCount) {
+                            renderer.openPage(i).use { page ->
+                                val w = 2000
+                                val h = (w.toFloat() * page.height / page.width).toInt().coerceAtLeast(1)
+                                val bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                                bm.eraseColor(android.graphics.Color.WHITE)
+                                page.render(bm, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                                val id = idCounter++
+                                val f = File(cache, "page_$id.jpg")
+                                Imaging.saveJpeg(bm, f, 92)
+                                bm.recycle()
+                                result.add(PageItem(id, f.absolutePath, f.absolutePath, null, 0, FilterMode.ORIGINAL))
+                            }
+                        }
+                    } finally {
+                        runCatching { renderer.close() }
+                        runCatching { pfd.close() }
+                    }
+                    result
+                }.getOrNull()
+            }
+            busy = false
+            if (loaded.isNullOrEmpty()) { message = err(); return@launch }
+            pages.addAll(loaded)
+            editingDoc = doc
+            selected = 0
+            screen = Screen.Review
         }
     }
 
@@ -174,7 +226,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val result = withContext(Dispatchers.Default) {
                 runCatching {
                     val src = Imaging.loadOriented(raw, 3600) ?: error("load")
-                    val warped = Imaging.warp(src, c, 3508, snapA4)
+                    val warped = Imaging.warp(src, c, 3508)
                     src.recycle()
                     val id = idCounter++
                     val f = File(cache, "page_$id.jpg")
@@ -298,12 +350,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (pages.isEmpty()) return
         val snapshot = pages.toList()
         val quality = defaultQuality
+        val editing = editingDoc
         viewModelScope.launch {
             busy = true
             val doc = withContext(Dispatchers.IO) {
                 runCatching {
-                    val file = repo.newFile(repo.defaultName())
-                    buildPdf(file, snapshot, quality)
+                    val file = editing?.file ?: repo.newFile(repo.defaultName())
+                    if (editing != null) {
+                        val tmp = File(repo.dir, file.name + ".tmp")
+                        buildPdf(tmp, snapshot, quality)
+                        if (!tmp.renameTo(file)) {
+                            tmp.copyTo(file, overwrite = true)
+                            tmp.delete()
+                        }
+                    } else {
+                        buildPdf(file, snapshot, quality)
+                    }
                     repo.writeMeta(file, snapshot.size, Imaging.pageBitmap(snapshot[0], 360))
                     DocItem(
                         file, file.nameWithoutExtension, snapshot.size, file.length(), file.lastModified(),
@@ -364,6 +426,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         pages.clear()
         cropQueue.clear()
         cropEditIndex = null
+        editingDoc = null
         selected = 0
         cache.listFiles()?.forEach {
             if (it.name.startsWith("raw_") || it.name.startsWith("imp_") || it.name.startsWith("page_")) it.delete()
@@ -375,6 +438,5 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setTheme(v: Int) { themeMode = v; prefs.theme = v }
     fun updateDefaultQuality(v: Int) { defaultQuality = v; prefs.quality = v }
     fun updateAutoDetect(v: Boolean) { autoDetect = v; prefs.autoDetect = v }
-    fun updateSnapA4(v: Boolean) { snapA4 = v; prefs.snapA4 = v }
     fun updateAppLock(v: Boolean) { appLock = v; prefs.appLock = v }
 }

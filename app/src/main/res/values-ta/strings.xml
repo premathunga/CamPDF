@@ -46,8 +46,6 @@
     <string name="create_pdf">PDF உருவாக்கு (%1$d)</string>
     <string name="filter_original">அசல்</string>
     <string name="filter_magic">மேஜிக்</string>
-    <string name="filter_enhance">தெளிவாக்கு</string>
-    <string name="filter_no_shadow">நிழல் இல்லை</string>
     <string name="filter_bw">கருப்பு-வெள்ளை</string>
     <string name="filter_gray">சாம்பல்</string>
     <string name="filter_lighten">பிரகாசம்</string>
@@ -81,8 +79,6 @@
     <string name="quality_compact_d">நீண்ட ஆவணங்களுக்கு மிகச் சிறிய கோப்புகள்</string>
     <string name="auto_detect">விளிம்புகளை தானாக கண்டறி</string>
     <string name="auto_detect_d">ஒவ்வொரு படத்திற்கும் பிறகு ஆவண விளிம்புகளை கண்டறியும்</string>
-    <string name="snap_a4">A4 ஆக சீரமை</string>
-    <string name="snap_a4_d">A4 போன்ற பக்கங்கள் சரியான A4 விகிதத்திற்கு மாற்றப்படும்</string>
     <string name="app_lock">ஆப் பூட்டு</string>
     <string name="app_lock_d">CamPDF-ஐ திறக்க கைரேகை அல்லது திரைப் பூட்டு தேவை</string>
     <string name="app_lock_unavailable">முதலில் தொலைபேசி அமைப்புகளில் கைரேகை அல்லது திரைப் பூட்டை அமைக்கவும்.</string>
@@ -93,4 +89,9 @@
     <string name="unlock">பூட்டைத் திற</string>
     <string name="error_generic">ஏதோ தவறு நடந்தது</string>
     <string name="no_viewer">PDF-ஐ திறக்க ஆப் இல்லை</string>
+    <string name="edit_pages">பக்கங்களைத் திருத்து</string>
+    <string name="save_changes">மாற்றங்களைச் சேமி</string>
+    <string name="filter_enhance">மேம்படுத்து</string>
+    <string name="filter_noshadow">நிழல் இல்லை</string>
+    <string name="viewer_error">இந்த PDF-ஐ திறக்க முடியவில்லை</string>
 </resources>
