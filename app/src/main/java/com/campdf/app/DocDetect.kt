@@ -57,8 +57,12 @@ object DocDetect {
             val c = evaluate(edge, w, h, mag, 2.5f)
             if (c != null) cands.add(c)
         }
+
+        // A real document is usually centered and large, while random bright regions or shadows can
+        // form a valid hull but fail the centrality test. Keep a slightly more permissive threshold so
+        // legitimate pages with a low-contrast background still make it through.
         val best = cands.maxByOrNull { it.score } ?: return fallback
-        return if (best.score >= 0.32f) best.pts else fallback
+        return if (best.score >= 0.18f) best.pts else fallback
     }
 
     // ---------- image operators ----------
@@ -153,7 +157,21 @@ object DocDetect {
     private fun brightMask(g: FloatArray, w: Int, h: Int): BooleanArray? {
         val total = w * h
         val hist = IntArray(256)
-        for (v in g) hist[v.toInt().coerceIn(0, 255)]++
+        val x0 = (w * 0.15f).toInt().coerceAtLeast(0)
+        val x1 = (w * 0.85f).toInt().coerceAtMost(w - 1)
+        val y0 = (h * 0.15f).toInt().coerceAtLeast(0)
+        val y1 = (h * 0.85f).toInt().coerceAtMost(h - 1)
+        var centralCount = 0
+        for (y in y0..y1) {
+            val row = y * w
+            for (x in x0..x1) {
+                val v = g[row + x].toInt().coerceIn(0, 255)
+                hist[v]++
+                centralCount++
+            }
+        }
+        if (centralCount == 0) return null
+
         var sum = 0L
         for (i in 0..255) sum += i.toLong() * hist[i]
         var sumB = 0L
@@ -163,7 +181,7 @@ object DocDetect {
         for (t in 0..255) {
             wB += hist[t]
             if (wB == 0) continue
-            val wF = total - wB
+            val wF = centralCount - wB
             if (wF == 0) break
             sumB += t.toLong() * hist[t]
             val mB = sumB.toDouble() / wB
@@ -171,7 +189,11 @@ object DocDetect {
             val v = wB.toDouble() * wF * (mB - mF) * (mB - mF)
             if (v > best) { best = v; thr = t }
         }
-        return BooleanArray(total) { g[it] > thr }
+
+        // A paper region often sits near the center of the frame; apply the threshold to the full image
+        // but keep the threshold from drifting to a fully black or fully white background.
+        val robustThr = thr.coerceIn(86, 198)
+        return BooleanArray(total) { g[it] > robustThr }
     }
 
     /** Edge pixels (dilated to close gaps) -> everything reachable from the frame border is background. */
@@ -380,12 +402,26 @@ object DocDetect {
 
         val minX = IntArray(h) { Int.MAX_VALUE }
         val maxX = IntArray(h) { -1 }
+        var cxAcc = 0f
+        var cyAcc = 0f
+        var count = 0
         for (i in comp) {
             val x = i % w
             val y = i / w
+            cxAcc += x
+            cyAcc += y
+            count++
             if (x < minX[y]) minX[y] = x
             if (x > maxX[y]) maxX[y] = x
         }
+
+        val centroidX = cxAcc / count
+        val centroidY = cyAcc / count
+        val centerBias = 1f - min(
+            1f,
+            (abs(centroidX - w / 2f) / (w * 0.35f)) + (abs(centroidY - h / 2f) / (h * 0.35f))
+        )
+
         val pts = ArrayList<Pt>()
         for (y in 0 until h) {
             if (maxX[y] >= 0) {
@@ -422,8 +458,6 @@ object DocDetect {
             if (sqrt(dx * dx + dy * dy) < minSide) return null
         }
         val es = edgeScore(ex, mag, w, h)
-        // Documents may be portrait or landscape. Penalize implausibly narrow slivers,
-        // but keep IDs, receipts and near-square forms eligible.
         val wTop = hypot(ex[1].x - ex[0].x, ex[1].y - ex[0].y)
         val wBot = hypot(ex[2].x - ex[3].x, ex[2].y - ex[3].y)
         val hLeft = hypot(ex[3].x - ex[0].x, ex[3].y - ex[0].y)
@@ -446,17 +480,17 @@ object DocDetect {
             ratio < 0.35f -> (ratio / 0.35f).coerceIn(0f, 1f)
             else -> (2.8f / ratio).coerceIn(0f, 1f)
         }
-        // Favor candidates with a clear boundary, planar symmetry, and a plausible page shape.
+
         val shapeScore = aspectScore * symmetryScore
-        var score = 0.40f * es + 0.25f * fill +
-            0.20f * min(1f, areaFrac / 0.6f) + 0.15f * shapeScore
-        // A real page photographed with some margin does not touch the frame at its corners; a quad whose
-        // corners sit on the frame edge is typically the page merged with a bright background (e.g. a striped cloth).
+        var score = 0.36f * es + 0.23f * fill +
+            0.18f * min(1f, areaFrac / 0.6f) + 0.14f * shapeScore + 0.09f * centerBias
+
         var onFrame = 0
         for (p in ex) {
             if (p.x <= 0.015f * w || p.y <= 0.015f * h || p.x >= 0.985f * w || p.y >= 0.985f * h) onFrame++
         }
         score *= 0.85f.pow(onFrame)
+
         val out = FloatArray(8)
         for (i in 0 until 4) {
             out[2 * i] = ((ex[i].x + 0.5f) / w).coerceIn(0f, 1f)
