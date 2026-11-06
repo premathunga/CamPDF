@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.FlashOff
 import androidx.compose.material.icons.rounded.FlashOn
 import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -52,6 +54,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
@@ -65,6 +68,7 @@ import androidx.core.content.ContextCompat
 import com.campdf.app.AppViewModel
 import com.campdf.app.R
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 @Composable
 fun CameraScreen(vm: AppViewModel) {
@@ -123,8 +127,16 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                     .build()
                 provider.unbindAll()
-                camera = provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture)
+                val boundCamera = provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture)
+                camera = boundCamera
                 imageCapture = capture
+                // Let the camera settle focus and exposure around the center of the document guide.
+                val point = previewView.meteringPointFactory.createPoint(previewView.width / 2f, previewView.height / 2f)
+                boundCamera.cameraControl.startFocusAndMetering(
+                    FocusMeteringAction.Builder(point)
+                        .setAutoCancelDuration(3, TimeUnit.SECONDS)
+                        .build()
+                )
             } catch (e: Exception) {
                 // camera unavailable; the user can still import images from the gallery
             }
@@ -154,6 +166,7 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
 
                 override fun onError(exception: ImageCaptureException) {
                     capturing = false
+                    f.delete()
                 }
             }
         )
@@ -177,14 +190,39 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
         Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f)) {
             AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
             Canvas(Modifier.fillMaxSize()) {
-                val inset = 24.dp.toPx()
+                // A portrait-page guide with corner brackets and thirds, rather than a generic
+                // dashed rectangle, gives a more useful framing reference for document capture.
+                val guideW = size.width * 0.82f
+                val guideH = size.height * 0.78f
+                val left = (size.width - guideW) / 2f
+                val top = (size.height - guideH) / 2f
+                val right = left + guideW
+                val bottom = top + guideH
+                val radius = 14.dp.toPx()
                 drawRoundRect(
-                    color = Color.White.copy(alpha = 0.75f),
-                    topLeft = Offset(inset, inset),
-                    size = Size(size.width - 2 * inset, size.height - 2 * inset),
-                    cornerRadius = CornerRadius(16.dp.toPx()),
-                    style = Stroke(width = 2.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(28f, 18f)))
+                    color = Color.White.copy(alpha = 0.32f),
+                    topLeft = Offset(left, top),
+                    size = Size(guideW, guideH),
+                    cornerRadius = CornerRadius(radius),
+                    style = Stroke(width = 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(10.dp.toPx(), 8.dp.toPx())))
                 )
+                val corner = 24.dp.toPx()
+                val thick = 3.dp.toPx()
+                val guideColor = Color.White.copy(alpha = 0.95f)
+                drawLine(guideColor, Offset(left, top + corner), Offset(left, top), thick)
+                drawLine(guideColor, Offset(left, top), Offset(left + corner, top), thick)
+                drawLine(guideColor, Offset(right - corner, top), Offset(right, top), thick)
+                drawLine(guideColor, Offset(right, top), Offset(right, top + corner), thick)
+                drawLine(guideColor, Offset(left, bottom - corner), Offset(left, bottom), thick)
+                drawLine(guideColor, Offset(left, bottom), Offset(left + corner, bottom), thick)
+                drawLine(guideColor, Offset(right - corner, bottom), Offset(right, bottom), thick)
+                drawLine(guideColor, Offset(right, bottom - corner), Offset(right, bottom), thick)
+                for (fraction in listOf(1f / 3f, 2f / 3f)) {
+                    val y = top + guideH * fraction
+                    val x = left + guideW * fraction
+                    drawLine(Color.White.copy(alpha = 0.28f), Offset(left + 8.dp.toPx(), y), Offset(right - 8.dp.toPx(), y), 1.dp.toPx())
+                    drawLine(Color.White.copy(alpha = 0.28f), Offset(x, top + 8.dp.toPx()), Offset(x, bottom - 8.dp.toPx()), 1.dp.toPx())
+                }
             }
             Text(
                 stringResource(R.string.camera_hint),
@@ -194,7 +232,7 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
                     .align(Alignment.TopCenter)
                     .padding(top = 6.dp)
                     .clip(CircleShape)
-                    .background(Color.Black.copy(alpha = 0.5f))
+                    .background(Color.Black.copy(alpha = 0.58f))
                     .padding(horizontal = 12.dp, vertical = 4.dp)
             )
         }
@@ -207,7 +245,7 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            IconButton(onClick = onGallery, modifier = Modifier.size(56.dp)) {
+            IconButton(onClick = onGallery, modifier = Modifier.size(56.dp), enabled = !capturing) {
                 Icon(Icons.Rounded.PhotoLibrary, null, tint = Color.White, modifier = Modifier.size(30.dp))
             }
             Box(
@@ -218,8 +256,11 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
                     .padding(7.dp)
                     .clip(CircleShape)
                     .background(c.primary)
-                    .clickable { capture() }
-            )
+                    .clickable(enabled = !capturing) { capture() },
+                contentAlignment = Alignment.Center
+            ) {
+                if (capturing) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(30.dp))
+            }
             Box(Modifier.size(56.dp))
         }
     }
