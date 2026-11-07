@@ -3,8 +3,9 @@
 Free, fully offline document scanner and PDF maker (Android, Kotlin + Jetpack Compose).
 
 - No INTERNET permission, no accounts, no ads, no analytics
-- Scan with CameraX or import images, auto edge detection, manual corner crop
-- Filters (Magic, Enhance, No shadow, B&W, Gray, Lighten), rotate, reorder, delete, add pages
+- Scan with CameraX or import images; offline edge detection (blur + Sobel + contour/hull quad fitting), perspective correction with true page proportions, manual corner crop
+- In-app PDF viewer; re-open any saved PDF to add / reorder / rotate / delete pages and save
+- Filters with live thumbnails: Original, Lighten, Enhance, No shadow, B&W (shadow removal + adaptive threshold + sharpening)
 - Draw a signature once and stamp it on any page
 - Compact PDFs (High / Balanced / Compact), share sheet, save to phone, rename, search
 - Sinhala / Tamil / English, light / dark theme, optional biometric app lock
@@ -21,21 +22,39 @@ Optional release signing: add repository secrets `KEYSTORE_BASE64` (base64 of yo
 ## Local build
 Install Android Studio (JDK 17) and open the folder, or run `gradle assembleDebug`.
 
-## What is new in 1.1.0 (scanner pipeline)
-All of this is pure Kotlin, still fully offline, no extra libraries.
 
-- **Smarter edge detection** (`Imaging.detectCorners`): tries three ways of finding the page
-  (bright blob, colour different from the picture border, paper-white / low-colour area), fits the
-  best four-corner shape to each (convex hull, max-area quadrilateral), and keeps the most
-  convincing one. Works on coloured tables and uneven light much better than a single brightness
-  threshold. Corners can still be dragged by hand.
-- **True page proportions** (`Imaging.warp`): the real width/height of the page is estimated from the
-  perspective of the four corners (Zhang and He, "Whiteboard scanning"), so a tilted photo no longer
-  comes out stretched. New setting **Straighten to A4**: pages within 5% of A4 become exact A4.
-- **New filters**: *Enhance* (shadow removal + whitening + light sharpening for crisp thin text) and
-  *No shadow* (shadow removal that keeps natural colours).
+## CamPDF scan engine update (Priority 1–3)
 
-## Algorithm test scripts
-`tools/prototype/` has the Python (OpenCV/NumPy) versions of the detector and the aspect-ratio
-estimator, with synthetic test scenes (`python3 synth.py`, `python3 aspect.py`). Use them to tune
-thresholds quickly before porting changes to Kotlin.
+This source update focuses on the existing offline scanning pipeline:
+
+- **Document detection (Priority 1):** candidate scoring now includes a document-shape plausibility score in addition to edge strength, component fill, and detected area. Portrait, landscape, receipt, and near-square documents remain eligible.
+- **Image enhancement (Priority 2):** the BW filter threshold is derived from robust image percentile levels instead of relying on one fixed threshold. This is intended to adapt to dim captures and varied paper/ink density while retaining a soft transition for fine strokes. The existing local background/shadow estimation and color-preserving `NO_SHADOW` path remain offline.
+- **Perspective correction (Priority 3):** perspective warp now validates normalized corner input, checks convexity and minimum quadrilateral area, limits aspect-ratio correction, initializes output as white, and uses a safe fallback for invalid transform matrices.
+
+## CamPDF professional enhancement engine update (Priority 4)
+
+- **Adaptive illumination correction & local shadow removal:** Replaced the coarse background map with morphological closing (dilation $r=3$ + erosion $r=1$) and separable 2D box smoothing. This captures true paper illumination without halo artifacts around text blocks and normalizes harsh phone/hand shadows.
+- **Handwriting handling:** `NO_SHADOW` divides each colour channel by its own paper-colour estimate, so blue ballpoint ink keeps its colour while the paper turns white. The explicit blue-ink check (red-channel absorption) is used only in the `BW` filter so that blue handwriting does not turn pale grey.
+- **Text-aware contrast enhancement:** Dark printed text is deepened using a non-linear contrast curve (`CONTRAST_LUT`), and blue ballpoint ink is enriched by deepening complementary channels, producing vivid, crisp text and signatures.
+- **Folds / creases:** these fade as a side effect of the illumination division and the white-gain curve; there is no separate crease detector.
+- **Standardized PDF page sizing:** Near-A4 scanned documents (aspect 1.33-1.50) get an ISO 216 A4 page (595.28 x 841.89 pt). The scan keeps its own proportions inside the page (centred, no stretching).
+
+These are algorithmic improvements, not a claim of parity with CamScanner. Test on a range of real devices and document samples (white paper on bright/dark surfaces, receipts, folded sheets, handwritten forms, and landscape documents) before release. This environment did not have an Android SDK/Gradle build tool configured, so a compile/device test could not be run here.
+
+## Review notes (v1.5.1)
+- Detection: quads whose corners sit on the frame edge are penalised (x0.85 per corner). On a real photo with a light-green striped cloth this widens the margin between the correct page candidate and the wrong "page + cloth" candidate from 0.02 to about 0.29.
+- Crop: leftover background strips (torn / folded edges) along the borders are trimmed after the perspective warp.
+- PDF: A4 page size no longer stretches the image.
+
+## v2.5.1 - automatic shadow strength + finger removal (Imaging.kt)
+- **Auto shadow strength (all filters).** The illumination map is now built for every filter (ENHANCE too).
+  Per pixel, a lighting variation under ~4% of the paper level is ignored (the page is divided by one constant paper
+  level, so no halos / faded text), from ~12% it is corrected fully, and in between it fades in. `shadowStrength()`
+  (0..1, from the depth and width of the shadows) additionally scales the sharpening and ENHANCE's text deepening.
+  ENHANCE is now colour-preserving *and* shadow-corrected (same gain on R, G, B); before it only stretched levels.
+- **Finger removal** (`detectFingers`, Settings -> "Remove fingers", default on): skin-coloured blobs (warm hue, moderate
+  saturation) that touch the page border and have a plausible size/shape are whitened with a soft edge, in every filter.
+  Thin red / brown ink, stamps inside the page, and yellowed or brown paper (too much skin-like area) are left alone.
+  Limits: a finger covering text hides that text for real; very pale or very dark skin under strong colour casts may be
+  missed; a skin-coloured table strip left along the page border would also be whitened (usually harmless).
+- Python references: `tools/prototype/v2_5/`. Not compiled here (no Android SDK in the sandbox).

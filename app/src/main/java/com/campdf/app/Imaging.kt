@@ -13,13 +13,12 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.abs
-import kotlin.math.atan2
-import kotlin.math.acos
-import kotlin.math.sqrt
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /** Pure-Kotlin image pipeline: no network, no external SDKs. */
 object Imaging {
@@ -84,413 +83,179 @@ object Imaging {
         return r
     }
 
-    // ---------- perspective crop ----------
+    // ---------- detection / perspective ----------
 
-    private const val A4_RATIO = 1.41421356
+    fun detectCorners(path: String): FloatArray = DocDetect.detect(path)
 
-    /** Snaps a width/height ratio to A4 (portrait or landscape) when it is within 5%. */
-    private fun snapA4(r: Double): Double {
-        if (abs((1.0 / r) / A4_RATIO - 1.0) < 0.05) return 1.0 / A4_RATIO
-        if (abs(r / A4_RATIO - 1.0) < 0.05) return A4_RATIO
-        return r
-    }
+    /** null when no page could be found with confidence (UI then shows a hint). */
+    fun detectCornersOrNull(path: String): FloatArray? = DocDetect.detectOrNull(path)
 
-    private fun cross(a: DoubleArray, b: DoubleArray) = doubleArrayOf(
+    private fun cross3(a: DoubleArray, b: DoubleArray) = doubleArrayOf(
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],
         a[0] * b[1] - a[1] * b[0]
     )
 
-    private fun dot(a: DoubleArray, b: DoubleArray) = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    private fun dot3(a: DoubleArray, b: DoubleArray) = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 
     /**
-     * Estimates the true width/height of the (rectangular) page from its four photographed corners
-     * (Zhang and He, "Whiteboard scanning"). pts = TL,TR,BR,BL in pixels; (u0,v0) = image centre.
-     * Returns null for degenerate cases (page almost front-on, bad corners).
+     * Real width/height ratio of a rectangle seen in perspective (Zhang & He, whiteboard scanning).
+     * p = TL, TR, BR, BL in pixels. Returns null when there is no usable perspective.
      */
-    private fun pageAspect(pts: FloatArray, u0: Double, v0: Double): Double? {
-        val m1 = doubleArrayOf(pts[0].toDouble(), pts[1].toDouble(), 1.0)   // TL
-        val m2 = doubleArrayOf(pts[2].toDouble(), pts[3].toDouble(), 1.0)   // TR
-        val m4 = doubleArrayOf(pts[4].toDouble(), pts[5].toDouble(), 1.0)   // BR
-        val m3 = doubleArrayOf(pts[6].toDouble(), pts[7].toDouble(), 1.0)   // BL
-        val c14 = cross(m1, m4)
-        val den2 = dot(cross(m2, m4), m3)
-        val den3 = dot(cross(m3, m4), m2)
-        if (abs(den2) < 1e-9 || abs(den3) < 1e-9) return null
-        val k2 = dot(c14, m3) / den2
-        val k3 = dot(c14, m2) / den3
+    private fun estimateAspect(p: FloatArray, imgW: Int, imgH: Int): Double? {
+        val m1 = doubleArrayOf(p[0].toDouble(), p[1].toDouble(), 1.0) // TL
+        val m2 = doubleArrayOf(p[2].toDouble(), p[3].toDouble(), 1.0) // TR
+        val m3 = doubleArrayOf(p[6].toDouble(), p[7].toDouble(), 1.0) // BL
+        val m4 = doubleArrayOf(p[4].toDouble(), p[5].toDouble(), 1.0) // BR
+        val k2d = dot3(cross3(m2, m4), m3)
+        val k3d = dot3(cross3(m3, m4), m2)
+        if (abs(k2d) < 1e-9 || abs(k3d) < 1e-9) return null
+        val c14 = cross3(m1, m4)
+        val k2 = dot3(c14, m3) / k2d
+        val k3 = dot3(c14, m2) / k3d
         val n2 = doubleArrayOf(k2 * m2[0] - m1[0], k2 * m2[1] - m1[1], k2 * m2[2] - m1[2])
         val n3 = doubleArrayOf(k3 * m3[0] - m1[0], k3 * m3[1] - m1[1], k3 * m3[2] - m1[2])
-        if (abs(n2[2]) < 1e-6 || abs(n3[2]) < 1e-6) return null
-        val f2 = -1.0 / (n2[2] * n3[2]) * (
+        val u0 = imgW / 2.0
+        val v0 = imgH / 2.0
+        val denom = n2[2] * n3[2]
+        if (abs(denom) < 1e-6) return null
+        val f2 = -1.0 / denom * (
             (n2[0] * n3[0] - (n2[0] * n3[2] + n2[2] * n3[0]) * u0 + n2[2] * n3[2] * u0 * u0) +
                 (n2[1] * n3[1] - (n2[1] * n3[2] + n2[2] * n3[1]) * v0 + n2[2] * n3[2] * v0 * v0)
             )
-        if (f2.isNaN() || f2.isInfinite() || f2 <= 0.0) return null
-        fun q(n: DoubleArray): Double {
-            val a = n[0] - u0 * n[2]
-            val b = n[1] - v0 * n[2]
-            return (a * a + b * b) / f2 + n[2] * n[2]
+        if (f2.isNaN() || f2 <= 0.0) return null
+        val f = sqrt(f2)
+        fun norm2(n: DoubleArray): Double {
+            val a = (n[0] - u0 * n[2]) / f
+            val b = (n[1] - v0 * n[2]) / f
+            return a * a + b * b + n[2] * n[2]
         }
-        val q3 = q(n3)
-        if (q3 <= 0.0) return null
-        val r = sqrt(q(n2) / q3)
-        if (r.isNaN() || r.isInfinite() || r < 0.2 || r > 5.0) return null
-        return r
+        val d3 = norm2(n3)
+        if (d3 <= 0.0) return null
+        val r = sqrt(norm2(n2) / d3)
+        return if (r.isFinite() && r in 0.25..4.0) r else null
     }
 
+    /** corners: normalized TL,TR,BR,BL. Returns an upright, de-skewed bitmap with the true page proportions. */
     /**
-     * corners: normalized TL,TR,BR,BL. Returns an upright, de-skewed bitmap.
-     * The output keeps the page's real proportions (estimated from the perspective), and is
-     * snapped to exact A4 when snapToA4 is true and the page is within 5% of A4.
+     * Perspective-correct a document quadrilateral. Corner coordinates are normalized TL,TR,BR,BL.
+     * Reject malformed/degenerate input before asking Android's Matrix for a homography; this
+     * avoids tiny/zero sized output bitmaps and unstable transforms from accidental corner crossing.
      */
-    fun warp(src: Bitmap, corners: FloatArray, maxOut: Int, snapToA4: Boolean = true): Bitmap {
-        val pts = FloatArray(8) { if (it % 2 == 0) corners[it] * src.width else corners[it] * src.height }
-        fun d(i: Int, j: Int) = hypot(pts[2 * i] - pts[2 * j], pts[2 * i + 1] - pts[2 * j + 1])
-        var w = max(d(0, 1), d(3, 2))
-        var h = max(d(0, 3), d(1, 2))
-        if (w < 8f) w = 8f
-        if (h < 8f) h = 8f
-        var ratio: Double = pageAspect(pts, src.width / 2.0, src.height / 2.0) ?: (w.toDouble() / h)
-        if (snapToA4) ratio = snapA4(ratio)
-        val area = w.toDouble() * h
-        val nh = sqrt(area / ratio)
-        w = (nh * ratio).toFloat()
-        h = nh.toFloat()
-        val scale = min(1f, maxOut / max(w, h))
+    fun warp(src: Bitmap, corners: FloatArray, maxOut: Int): Bitmap {
+        require(maxOut >= 256) { "Output resolution is too small" }
+        val fallback = floatArrayOf(0.02f, 0.02f, 0.98f, 0.02f, 0.98f, 0.98f, 0.02f, 0.98f)
+        val c = if (corners.size == 8 && corners.all { it.isFinite() }) corners else fallback
+        val normalized = FloatArray(8) { c[it].coerceIn(0f, 1f) }
+        val pts = FloatArray(8) {
+            if (it % 2 == 0) normalized[it] * (src.width - 1) else normalized[it] * (src.height - 1)
+        }
+
+        fun cross(i: Int, j: Int, k: Int): Float {
+            val ax = pts[2 * j] - pts[2 * i]
+            val ay = pts[2 * j + 1] - pts[2 * i + 1]
+            val bx = pts[2 * k] - pts[2 * j]
+            val by = pts[2 * k + 1] - pts[2 * j + 1]
+            return ax * by - ay * bx
+        }
+        val turns = (0..3).map { cross(it, (it + 1) % 4, (it + 2) % 4) }
+        val convex = turns.all { it > 0f } || turns.all { it < 0f }
+        val area = abs(
+            (0..3).sumOf { i ->
+                val j = (i + 1) % 4
+                (pts[2 * i] * pts[2 * j + 1] - pts[2 * j] * pts[2 * i + 1]).toDouble()
+            }
+        ) / 2.0
+        val safePts = if (convex && area >= src.width.toDouble() * src.height * 0.025) pts else
+            FloatArray(8) { if (it % 2 == 0) fallback[it] * (src.width - 1) else fallback[it] * (src.height - 1) }
+
+        fun d(i: Int, j: Int) = hypot(safePts[2 * i] - safePts[2 * j], safePts[2 * i + 1] - safePts[2 * j + 1])
+        var w = ((d(0, 1) + d(3, 2)) / 2f).coerceAtLeast(8f)
+        var h = ((d(0, 3) + d(1, 2)) / 2f).coerceAtLeast(8f)
+        val a = estimateAspect(safePts, src.width, src.height)
+        if (a != null && a in 0.20..5.0) {
+            val hEst = (w / a).toFloat()
+            if (hEst in (h * 0.75f)..(h * 1.33f)) h = hEst
+        }
+        val scale = min(1f, maxOut.toFloat() / max(w, h))
         val ow = (w * scale).roundToInt().coerceAtLeast(1)
         val oh = (h * scale).roundToInt().coerceAtLeast(1)
         val out = Bitmap.createBitmap(ow, oh, Bitmap.Config.ARGB_8888)
+        out.eraseColor(android.graphics.Color.WHITE)
         val dst = floatArrayOf(0f, 0f, ow.toFloat(), 0f, ow.toFloat(), oh.toFloat(), 0f, oh.toFloat())
         val m = Matrix()
-        m.setPolyToPoly(pts, 0, dst, 0, 4)
-        Canvas(out).drawBitmap(src, m, Paint(Paint.FILTER_BITMAP_FLAG))
-        return out
+        if (!m.setPolyToPoly(safePts, 0, dst, 0, 4)) {
+            out.recycle()
+            return Bitmap.createScaledBitmap(src, ow, oh, true)
+        }
+        Canvas(out).drawBitmap(src, m, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
+        return trimBorders(out)
     }
-
-    // ---------- automatic edge detection ----------
-
-    private class Cand(val score: Float, val q: List<IntArray>)
 
     /**
-     * Looks for the page in three different ways (a bright blob, an area whose colour differs from
-     * the picture border, and a "paper-white" low-colour area), turns each blob into its best
-     * four-corner shape, and keeps the most convincing one. The user can always drag the corners.
-     * Returns normalized TL,TR,BR,BL, or a default frame when nothing convincing is found.
+     * Removes thin strips of background (table / cloth) that remain along the borders after the crop,
+     * e.g. from torn or folded page edges. Trims at most 5% per side and only when the page itself is light.
      */
-    fun detectCorners(path: String): FloatArray {
-        val fallback = floatArrayOf(0.05f, 0.05f, 0.95f, 0.05f, 0.95f, 0.95f, 0.05f, 0.95f)
-        val bm = loadOriented(path, 320) ?: return fallback
+    private fun trimBorders(bm: Bitmap): Bitmap {
         val w = bm.width
         val h = bm.height
-        val total = w * h
-        val px = IntArray(total)
-        bm.getPixels(px, 0, w, 0, 0, w, h)
-        bm.recycle()
-        val rc = IntArray(total) { (px[it] shr 16) and 255 }
-        val gc = IntArray(total) { (px[it] shr 8) and 255 }
-        val bc = IntArray(total) { px[it] and 255 }
-        val gray = IntArray(total) { (rc[it] * 299 + gc[it] * 587 + bc[it] * 114) / 1000 }
-        val masks = ArrayList<BooleanArray>()
-
-        // 1) bright blob
-        val g = boxBlurInt(gray, w, h, 2)
-        val thr = otsu(g)
-        masks.add(BooleanArray(total) { g[it] > thr })
-
-        // 2) colour that differs from the picture border
-        val m = max(2, (0.04f * min(w, h)).toInt())
-        val mr = frameMedian(rc, w, h, m)
-        val mg = frameMedian(gc, w, h, m)
-        val mb = frameMedian(bc, w, h, m)
-        val dist0 = IntArray(total) { abs(rc[it] - mr) + abs(gc[it] - mg) + abs(bc[it] - mb) }
-        val dist = boxBlurInt(dist0, w, h, 2)
-        val dthr = otsu(dist)
-        masks.add(BooleanArray(total) { dist[it] > dthr })
-
-        // 3) paper-white (little colour) when the table is coloured
-        val chroma0 = IntArray(total) {
-            max(rc[it], max(gc[it], bc[it])) - min(rc[it], min(gc[it], bc[it]))
-        }
-        val chroma = boxBlurInt(chroma0, w, h, 2)
-        val cthr = otsu(chroma)
-        var sumIn = 0L
-        var nIn = 0
-        var sumOut = 0L
-        var nOut = 0
-        for (i in 0 until total) {
-            if (chroma[i] <= cthr) { sumIn += chroma[i]; nIn++ } else { sumOut += chroma[i]; nOut++ }
-        }
-        if (nIn > 0 && nOut > 0 && (sumOut.toDouble() / nOut - sumIn.toDouble() / nIn) >= 25.0) {
-            masks.add(BooleanArray(total) { chroma[it] <= cthr })
-        }
-
-        var best: Cand? = null
-        for (mk in masks) {
-            val c = candidate(mk, w, h) ?: continue
-            val b = best
-            if (b == null || c.score > b.score) best = c
-        }
-        val bq = best ?: return fallback
-        val out = FloatArray(8)
-        for (i in 0 until 4) {
-            out[2 * i] = (bq.q[i][0] + 0.5f) / w
-            out[2 * i + 1] = (bq.q[i][1] + 0.5f) / h
-        }
-        return out
-    }
-
-    private fun boxBlurInt(a: IntArray, w: Int, h: Int, r: Int): IntArray {
-        val n = 2 * r + 1
-        val tmp = IntArray(a.size)
-        val out = IntArray(a.size)
-        for (y in 0 until h) {
-            val row = y * w
-            for (x in 0 until w) {
-                var s = 0
-                for (k in -r..r) s += a[row + (x + k).coerceIn(0, w - 1)]
-                tmp[row + x] = s / n
-            }
-        }
-        for (y in 0 until h) {
-            for (x in 0 until w) {
-                var s = 0
-                for (k in -r..r) s += tmp[(y + k).coerceIn(0, h - 1) * w + x]
-                out[y * w + x] = s / n
-            }
-        }
-        return out
-    }
-
-    private fun otsu(v: IntArray): Int {
+        if (w < 300 || h < 300) return bm
+        val f = max(1, max(w, h) / 600)
+        val sw = w / f
+        val sh = h / f
+        val small = Bitmap.createScaledBitmap(bm, sw, sh, true)
+        val px = IntArray(sw * sh)
+        small.getPixels(px, 0, sw, 0, 0, sw, sh)
+        if (small !== bm) small.recycle()
+        val lum = IntArray(px.size) { luma(px[it]).toInt() }
         val hist = IntArray(256)
-        for (x in v) hist[x.coerceIn(0, 255)]++
-        val total = v.size
-        var sum = 0L
-        for (i in 0..255) sum += i.toLong() * hist[i]
-        var sumB = 0L
-        var wB = 0
-        var best = -1.0
-        var thr = 128
-        for (t in 0..255) {
-            wB += hist[t]
-            if (wB == 0) continue
-            val wF = total - wB
-            if (wF == 0) break
-            sumB += t.toLong() * hist[t]
-            val mB = sumB.toDouble() / wB
-            val mF = (sum - sumB).toDouble() / wF
-            val vv = wB.toDouble() * wF * (mB - mF) * (mB - mF)
-            if (vv > best) { best = vv; thr = t }
-        }
-        return thr
-    }
-
-    private fun frameMedian(ch: IntArray, w: Int, h: Int, m: Int): Int {
-        val hist = IntArray(256)
-        var n = 0
-        for (y in 0 until h) {
-            for (x in 0 until w) {
-                if (x < m || y < m || x >= w - m || y >= h - m) {
-                    hist[ch[y * w + x].coerceIn(0, 255)]++
-                    n++
-                }
+        var cnt = 0
+        for (y in sh / 4 until sh * 3 / 4) {
+            for (x in sw / 4 until sw * 3 / 4) {
+                hist[lum[y * sw + x].coerceIn(0, 255)]++
+                cnt++
             }
         }
         var acc = 0
+        var ref = 255
         for (i in 0..255) {
             acc += hist[i]
-            if (acc * 2 >= n) return i
+            if (acc >= cnt * 0.7f) { ref = i; break }
         }
-        return 128
-    }
-
-    /** Largest 4-connected blob of true pixels, as a list of pixel indices (or null). */
-    private fun largestComponent(mask: BooleanArray, w: Int, h: Int): IntArray? {
-        val total = w * h
-        val visited = BooleanArray(total)
-        val queue = IntArray(total)
-        var best: IntArray? = null
-        var bestSize = 0
-        for (start in 0 until total) {
-            if (visited[start] || !mask[start]) continue
-            var head = 0
-            var tail = 0
-            queue[tail++] = start
-            visited[start] = true
-            while (head < tail) {
-                val idx = queue[head++]
-                val x = idx % w
-                val y = idx / w
-                if (x > 0) { val n = idx - 1; if (!visited[n] && mask[n]) { visited[n] = true; queue[tail++] = n } }
-                if (x < w - 1) { val n = idx + 1; if (!visited[n] && mask[n]) { visited[n] = true; queue[tail++] = n } }
-                if (y > 0) { val n = idx - w; if (!visited[n] && mask[n]) { visited[n] = true; queue[tail++] = n } }
-                if (y < h - 1) { val n = idx + w; if (!visited[n] && mask[n]) { visited[n] = true; queue[tail++] = n } }
-            }
-            if (tail > bestSize) {
-                bestSize = tail
-                best = queue.copyOf(tail)
-            }
+        if (ref < 110) return bm
+        val thr = ref * 0.62f
+        val maxT = max(2, (min(sw, sh) * 0.05f).toInt())
+        fun rowFrac(y: Int): Float {
+            var n = 0
+            for (x in 0 until sw) if (lum[y * sw + x] < thr) n++
+            return n.toFloat() / sw
         }
-        return best
-    }
-
-    private fun cross3(ox: Int, oy: Int, ax: Int, ay: Int, bx: Int, by: Int): Long =
-        (ax - ox).toLong() * (by - oy) - (ay - oy).toLong() * (bx - ox)
-
-    /** Andrew's monotone chain. keys = x * 4096 + y (distinct). Returns hull points as [x, y]. */
-    private fun convexHull(keys: IntArray): List<IntArray> {
-        keys.sort()
-        val n = keys.size
-        val xs = IntArray(n) { keys[it] / 4096 }
-        val ys = IntArray(n) { keys[it] % 4096 }
-        if (n < 3) return List(n) { intArrayOf(xs[it], ys[it]) }
-        val st = IntArray(2 * n + 2)
-        var k = 0
-        for (i in 0 until n) {
-            while (k >= 2 && cross3(xs[st[k - 2]], ys[st[k - 2]], xs[st[k - 1]], ys[st[k - 1]], xs[i], ys[i]) <= 0L) k--
-            st[k++] = i
+        fun colFrac(x: Int): Float {
+            var n = 0
+            for (y in 0 until sh) if (lum[y * sw + x] < thr) n++
+            return n.toFloat() / sh
         }
-        val lower = k + 1
-        for (i in n - 2 downTo 0) {
-            while (k >= lower && cross3(xs[st[k - 2]], ys[st[k - 2]], xs[st[k - 1]], ys[st[k - 1]], xs[i], ys[i]) <= 0L) k--
-            st[k++] = i
-        }
-        val out = ArrayList<IntArray>()
-        for (i in 0 until k - 1) out.add(intArrayOf(xs[st[i]], ys[st[i]]))
+        var top = 0
+        while (top < maxT && rowFrac(top) > 0.10f) top++
+        var bottom = 0
+        while (bottom < maxT && rowFrac(sh - 1 - bottom) > 0.10f) bottom++
+        var left = 0
+        while (left < maxT && colFrac(left) > 0.10f) left++
+        var right = 0
+        while (right < maxT && colFrac(sw - 1 - right) > 0.10f) right++
+        if (top + bottom + left + right == 0) return bm
+        if (top > 0) top++
+        if (bottom > 0) bottom++
+        if (left > 0) left++
+        if (right > 0) right++
+        val l = left * f
+        val t = top * f
+        val nw = w - l - right * f
+        val nh = h - t - bottom * f
+        if (nw < w / 2 || nh < h / 2) return bm
+        val out = Bitmap.createBitmap(bm, l, t, nw, nh)
+        if (out !== bm) bm.recycle()
         return out
-    }
-
-    private fun polyArea(p: List<IntArray>): Double {
-        var s = 0L
-        for (i in p.indices) {
-            val a = p[i]
-            val b = p[(i + 1) % p.size]
-            s += a[0].toLong() * b[1] - b[0].toLong() * a[1]
-        }
-        return abs(s) / 2.0
-    }
-
-    /** Drops the least important vertices until at most maxN remain. */
-    private fun reduceHull(hull: List<IntArray>, maxN: Int): List<IntArray> {
-        val h = ArrayList(hull)
-        while (h.size > maxN) {
-            var bestArea = Long.MAX_VALUE
-            var bi = 0
-            for (i in h.indices) {
-                val a = h[(i + h.size - 1) % h.size]
-                val b = h[i]
-                val c = h[(i + 1) % h.size]
-                val ar = abs(cross3(a[0], a[1], b[0], b[1], c[0], c[1]))
-                if (ar < bestArea) { bestArea = ar; bi = i }
-            }
-            h.removeAt(bi)
-        }
-        return h
-    }
-
-    /** The four hull vertices that enclose the largest area. */
-    private fun bestQuad(hull: List<IntArray>): List<IntArray>? {
-        val h = reduceHull(hull, 14)
-        val n = h.size
-        if (n < 4) return null
-        var bestA = -1.0
-        var bq: List<IntArray>? = null
-        for (a in 0 until n - 3) for (b in a + 1 until n - 2) for (c in b + 1 until n - 1) for (d in c + 1 until n) {
-            val q = listOf(h[a], h[b], h[c], h[d])
-            val ar = polyArea(q)
-            if (ar > bestA) { bestA = ar; bq = q }
-        }
-        return bq
-    }
-
-    /** Orders four points clockwise starting at the top-left: TL, TR, BR, BL. */
-    private fun orderQuad(q: List<IntArray>): List<IntArray> {
-        val cx = (q[0][0] + q[1][0] + q[2][0] + q[3][0]) / 4.0
-        val cy = (q[0][1] + q[1][1] + q[2][1] + q[3][1]) / 4.0
-        val s = q.sortedBy { atan2(it[1] - cy, it[0] - cx) }
-        var k = 0
-        for (i in 1..3) if (s[i][0] + s[i][1] < s[k][0] + s[k][1]) k = i
-        return List(4) { s[(k + it) % 4] }
-    }
-
-    private fun anglesOk(q: List<IntArray>): Boolean {
-        for (i in 0..3) {
-            val p = q[i]
-            val a = q[(i + 3) % 4]
-            val b = q[(i + 1) % 4]
-            val ax = (a[0] - p[0]).toDouble()
-            val ay = (a[1] - p[1]).toDouble()
-            val bx = (b[0] - p[0]).toDouble()
-            val by = (b[1] - p[1]).toDouble()
-            val c = (ax * bx + ay * by) / (sqrt(ax * ax + ay * ay) * sqrt(bx * bx + by * by) + 1e-9)
-            val ang = Math.toDegrees(acos(c.coerceIn(-1.0, 1.0)))
-            if (ang < 50.0 || ang > 130.0) return false
-        }
-        return true
-    }
-
-    /** Turns a mask into a scored four-corner page candidate, or null if it does not look like a page. */
-    private fun candidate(mask: BooleanArray, w: Int, h: Int): Cand? {
-        val total = w * h
-        val compIdx = largestComponent(mask, w, h) ?: return null
-        val inComp = BooleanArray(total)
-        for (i in compIdx) inComp[i] = true
-        // fill holes (text, shadows): flood the outside from the picture border
-        val outside = BooleanArray(total)
-        val queue = IntArray(total)
-        var head = 0
-        var tail = 0
-        for (x in 0 until w) {
-            val t = x
-            val b = (h - 1) * w + x
-            if (!inComp[t] && !outside[t]) { outside[t] = true; queue[tail++] = t }
-            if (!inComp[b] && !outside[b]) { outside[b] = true; queue[tail++] = b }
-        }
-        for (y in 0 until h) {
-            val l = y * w
-            val r = y * w + w - 1
-            if (!inComp[l] && !outside[l]) { outside[l] = true; queue[tail++] = l }
-            if (!inComp[r] && !outside[r]) { outside[r] = true; queue[tail++] = r }
-        }
-        while (head < tail) {
-            val idx = queue[head++]
-            val x = idx % w
-            val y = idx / w
-            if (x > 0) { val n = idx - 1; if (!inComp[n] && !outside[n]) { outside[n] = true; queue[tail++] = n } }
-            if (x < w - 1) { val n = idx + 1; if (!inComp[n] && !outside[n]) { outside[n] = true; queue[tail++] = n } }
-            if (y > 0) { val n = idx - w; if (!inComp[n] && !outside[n]) { outside[n] = true; queue[tail++] = n } }
-            if (y < h - 1) { val n = idx + w; if (!inComp[n] && !outside[n]) { outside[n] = true; queue[tail++] = n } }
-        }
-        var area = 0
-        for (i in 0 until total) if (!outside[i]) area++
-        if (area < 0.12 * total || area > 0.97 * total) return null
-
-        // boundary pixels of the filled blob
-        val keys = ArrayList<Int>()
-        for (y in 0 until h) {
-            for (x in 0 until w) {
-                val i = y * w + x
-                if (outside[i]) continue
-                val edge = x == 0 || y == 0 || x == w - 1 || y == h - 1 ||
-                    outside[i - 1] || outside[i + 1] || outside[i - w] || outside[i + w]
-                if (edge) keys.add(x * 4096 + y)
-            }
-        }
-        if (keys.size < 4) return null
-        val hull = convexHull(keys.toIntArray())
-        val quad = bestQuad(hull) ?: return null
-        val q = orderQuad(quad)
-        if (!anglesOk(q)) return null
-        val qa = polyArea(q)
-        if (qa < 0.12 * total) return null
-        val fill = min(1.0, area / qa)
-        if (fill < 0.75) return null
-        var score = (fill * fill * sqrt(qa / total)).toFloat()
-        for (p in q) {
-            if (p[0] <= 1 || p[1] <= 1 || p[0] >= w - 2 || p[1] >= h - 2) score *= 0.8f
-        }
-        return Cand(score, q)
     }
 
     // ---------- filters ----------
@@ -498,66 +263,16 @@ object Imaging {
     fun applyFilter(src: Bitmap, mode: FilterMode): Bitmap = when (mode) {
         FilterMode.ORIGINAL -> src
         FilterMode.LIGHTEN -> lighten(src)
-        FilterMode.ENHANCE -> {
-            val n = normalize(src, FilterMode.MAGIC)
-            src.recycle()
-            sharpen(n, 0.6f)
-        }
-        else -> normalize(src, mode).also { src.recycle() }
-    }
-
-    /** Light sharpening (cross kernel, row by row to keep memory low) so thin text stays crisp. */
-    private fun sharpen(src: Bitmap, amount: Float): Bitmap {
-        val w = src.width
-        val h = src.height
-        if (w < 3 || h < 3) return src
-        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        var prev = IntArray(w)
-        var cur = IntArray(w)
-        var next = IntArray(w)
-        val res = IntArray(w)
-        src.getPixels(cur, 0, w, 0, 0, w, 1)
-        cur.copyInto(prev)
-        src.getPixels(next, 0, w, 0, 1, w, 1)
-        for (y in 0 until h) {
-            for (x in 0 until w) {
-                val xl = if (x > 0) x - 1 else 0
-                val xr = if (x < w - 1) x + 1 else w - 1
-                val c = cur[x]
-                val l = cur[xl]
-                val r = cur[xr]
-                val u = prev[x]
-                val d = next[x]
-                val rr = sharpCh(c, l, r, u, d, 16, amount)
-                val gg = sharpCh(c, l, r, u, d, 8, amount)
-                val bb = sharpCh(c, l, r, u, d, 0, amount)
-                res[x] = (0xFF shl 24) or (rr shl 16) or (gg shl 8) or bb
-            }
-            out.setPixels(res, 0, w, 0, y, w, 1)
-            val t = prev
-            prev = cur
-            cur = next
-            next = t
-            val ny = if (y + 2 < h) y + 2 else h - 1
-            src.getPixels(next, 0, w, 0, ny, w, 1)
-        }
-        src.recycle()
-        return out
-    }
-
-    private fun sharpCh(c: Int, l: Int, r: Int, u: Int, d: Int, shift: Int, a: Float): Int {
-        val cv = (c shr shift) and 255
-        val nb = ((l shr shift) and 255) + ((r shr shift) and 255) + ((u shr shift) and 255) + ((d shr shift) and 255)
-        return (cv * (1f + 4f * a) - a * nb).toInt().coerceIn(0, 255)
+        else -> process(src, mode).also { src.recycle() }
     }
 
     private fun lighten(src: Bitmap): Bitmap {
         val out = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
         val cm = ColorMatrix(
             floatArrayOf(
-                1.15f, 0f, 0f, 0f, 18f,
-                0f, 1.15f, 0f, 0f, 18f,
-                0f, 0f, 1.15f, 0f, 18f,
+                1.12f, 0f, 0f, 0f, 22f,
+                0f, 1.12f, 0f, 0f, 22f,
+                0f, 0f, 1.12f, 0f, 22f,
                 0f, 0f, 0f, 1f, 0f
             )
         )
@@ -570,37 +285,74 @@ object Imaging {
     private fun luma(p: Int): Float =
         ((p shr 16) and 255) * 0.299f + ((p shr 8) and 255) * 0.587f + (p and 255) * 0.114f
 
-    private fun dilate(a: FloatArray, w: Int, h: Int, r: Int): FloatArray {
+    private fun dilateF(a: FloatArray, w: Int, h: Int, r: Int): FloatArray {
         val out = FloatArray(a.size)
-        for (y in 0 until h) for (x in 0 until w) {
-            var m = 0f
-            for (yy in max(0, y - r)..min(h - 1, y + r)) for (xx in max(0, x - r)..min(w - 1, x + r)) {
-                val v = a[yy * w + xx]
-                if (v > m) m = v
+        for (y in 0 until h) {
+            val yMin = max(0, y - r)
+            val yMax = min(h - 1, y + r)
+            for (x in 0 until w) {
+                val xMin = max(0, x - r)
+                val xMax = min(w - 1, x + r)
+                var m = 0f
+                for (yy in yMin..yMax) {
+                    val row = yy * w
+                    for (xx in xMin..xMax) {
+                        val v = a[row + xx]
+                        if (v > m) m = v
+                    }
+                }
+                out[y * w + x] = m
             }
-            out[y * w + x] = m
         }
         return out
     }
 
-    private fun boxBlur(a: FloatArray, w: Int, h: Int, r: Int): FloatArray {
+    private fun boxBlurSeparable(a: FloatArray, w: Int, h: Int, r: Int): FloatArray {
+        val tmp = FloatArray(a.size)
         val out = FloatArray(a.size)
-        for (y in 0 until h) for (x in 0 until w) {
-            var s = 0f
-            var n = 0
-            for (yy in max(0, y - r)..min(h - 1, y + r)) for (xx in max(0, x - r)..min(w - 1, x + r)) {
-                s += a[yy * w + xx]
-                n++
+        for (y in 0 until h) {
+            val row = y * w
+            for (x in 0 until w) {
+                val xMin = max(0, x - r)
+                val xMax = min(w - 1, x + r)
+                var sum = 0f
+                var cnt = 0
+                for (xx in xMin..xMax) {
+                    sum += a[row + xx]
+                    cnt++
+                }
+                tmp[row + x] = sum / cnt
             }
-            out[y * w + x] = s / n
+        }
+        for (x in 0 until w) {
+            for (y in 0 until h) {
+                val yMin = max(0, y - r)
+                val yMax = min(h - 1, y + r)
+                var sum = 0f
+                var cnt = 0
+                for (yy in yMin..yMax) {
+                    sum += tmp[yy * w + x]
+                    cnt++
+                }
+                out[y * w + x] = sum / cnt
+            }
         }
         return out
     }
 
-    /** Estimates paper brightness per area (ignoring text) at low resolution. */
-    private fun backgroundMap(src: Bitmap): Triple<FloatArray, Int, Int> {
-        val sw = (src.width / 20).coerceAtLeast(6)
-        val sh = (src.height / 20).coerceAtLeast(6)
+    private class BgMap(val r: FloatArray, val g: FloatArray, val b: FloatArray, val sw: Int, val sh: Int)
+
+    /**
+     * Estimates the paper surface color (R, G, B) across the document.
+     * Dividing by this 3-channel illumination surface removes phone shadows, color casts,
+     * and fold creases cleanly while turning paper into pure neutral white (255, 255, 255).
+     */
+    private fun backgroundMap(src: Bitmap): BgMap {
+        val maxDim = 80
+        val longest = max(src.width, src.height)
+        val scale = if (longest > maxDim) maxDim.toFloat() / longest else 1f
+        val sw = (src.width * scale).roundToInt().coerceAtLeast(16)
+        val sh = (src.height * scale).roundToInt().coerceAtLeast(16)
         var cur = src
         while (cur.width / 2 >= sw * 2 && cur.height / 2 >= sh * 2) {
             val next = Bitmap.createScaledBitmap(cur, cur.width / 2, cur.height / 2, true)
@@ -612,80 +364,497 @@ object Imaging {
         val px = IntArray(sw * sh)
         small.getPixels(px, 0, sw, 0, 0, sw, sh)
         if (small !== src) small.recycle()
-        var lum = FloatArray(sw * sh) { luma(px[it]) }
-        lum = dilate(lum, sw, sh, 2)
-        lum = boxBlur(lum, sw, sh, 3)
-        lum = boxBlur(lum, sw, sh, 3)
-        return Triple(lum, sw, sh)
+
+        var bgR = FloatArray(sw * sh) { ((px[it] shr 16) and 255).toFloat() }
+        var bgG = FloatArray(sw * sh) { ((px[it] shr 8) and 255).toFloat() }
+        var bgB = FloatArray(sw * sh) { (px[it] and 255).toFloat() }
+
+        // Morphological closing + box blur works better than a single coarse blur; it preserves
+        // the paper tone while suppressing dark text and folds.
+        bgR = boxBlurSeparable(dilateF(bgR, sw, sh, 4), sw, sh, 3)
+        bgG = boxBlurSeparable(dilateF(bgG, sw, sh, 4), sw, sh, 3)
+        bgB = boxBlurSeparable(dilateF(bgB, sw, sh, 4), sw, sh, 3)
+
+        // A second light pass keeps the paper white without making the whole scan too flat.
+        bgR = boxBlurSeparable(bgR, sw, sh, 2)
+        bgG = boxBlurSeparable(bgG, sw, sh, 2)
+        bgB = boxBlurSeparable(bgB, sw, sh, 2)
+
+        return BgMap(bgR, bgG, bgB, sw, sh)
     }
 
-    private fun enhance(c: Float): Float = ((c - 120f) * 1.3f + 130f).coerceIn(0f, 255f)
+    /** Black / white levels for auto-contrast (ignores extreme outliers). */
+    private fun levels(src: Bitmap): Pair<Float, Float> {
+        val sc = 300f / max(src.width, src.height)
+        val small = if (sc < 1f) {
+            Bitmap.createScaledBitmap(
+                src,
+                (src.width * sc).roundToInt().coerceAtLeast(1),
+                (src.height * sc).roundToInt().coerceAtLeast(1),
+                true
+            )
+        } else src
+        val px = IntArray(small.width * small.height)
+        small.getPixels(px, 0, small.width, 0, 0, small.width, small.height)
+        if (small !== src) small.recycle()
+        val hist = IntArray(256)
+        for (p in px) hist[luma(p).toInt().coerceIn(0, 255)]++
+        val total = px.size
+        fun pct(f: Float): Float {
+            var acc = 0
+            val target = (total * f).toInt()
+            for (i in 0..255) {
+                acc += hist[i]
+                if (acc >= target) return i.toFloat()
+            }
+            return 255f
+        }
+        return Pair(pct(0.005f), pct(0.97f))
+    }
 
-    /** Gentler than enhance(): keeps natural colours, only whitens the paper. */
-    private fun soft(c: Float): Float = ((c - 128f) * 1.08f + 133f).coerceIn(0f, 255f)
+    private val CONTRAST_LUT = FloatArray(256) { i ->
+        if (i < 200) (200f * (i / 200f).pow(1.30f)).coerceIn(0f, 255f) else i.toFloat()
+    }
 
-    /** Shadow removal + whitening. MAGIC keeps colour, GRAY is monochrome, BW is crisp black/white. */
-    private fun normalize(src: Bitmap, mode: FilterMode): Bitmap {
+    private fun sharpenCh(c: Int, u: Int, d: Int, l: Int, r: Int, shift: Int, amt: Float): Int {
+        val cc = (c shr shift) and 255
+        val avg = (4 * cc + ((u shr shift) and 255) + ((d shr shift) and 255) +
+            ((l shr shift) and 255) + ((r shr shift) and 255)) / 8f
+        return (cc + amt * (cc - avg)).toInt().coerceIn(0, 255)
+    }
+
+    // ---------- adaptive shadow strength ----------
+
+    private fun smooth01(t: Float): Float {
+        val x = t.coerceIn(0f, 1f)
+        return x * x * (3f - 2f * x)
+    }
+
+    private fun percentileOf(a: FloatArray, f: Float): Float {
+        val c = a.copyOf()
+        c.sort()
+        return c[(c.size * f).toInt().coerceIn(0, c.size - 1)]
+    }
+
+    /** Paper colour (R, G, B) = 90th percentile of the illumination map. */
+    private fun paperLevel(bg: BgMap): FloatArray =
+        floatArrayOf(percentileOf(bg.r, 0.90f), percentileOf(bg.g, 0.90f), percentileOf(bg.b, 0.90f))
+
+    /**
+     * 0..1: how deep and how wide the shadows / uneven light on the page are, measured on the
+     * illumination map (page interior only). 0 = even light, 1 = strong shadow.
+     */
+    private fun shadowStrength(bg: BgMap): Float {
+        val n = bg.sw * bg.sh
+        val lum = FloatArray(n) { bg.r[it] * 0.299f + bg.g[it] * 0.587f + bg.b[it] * 0.114f }
+        val ref = percentileOf(lum, 0.90f).coerceAtLeast(30f)
+        val mx = (bg.sw * 0.06f).toInt()
+        val my = (bg.sh * 0.06f).toInt()
+        val vals = ArrayList<Float>()
+        for (yy in my until bg.sh - my) {
+            for (xx in mx until bg.sw - mx) vals.add(lum[yy * bg.sw + xx] / ref)
+        }
+        if (vals.size < 20) return 0f
+        val arr = vals.toFloatArray()
+        arr.sort()
+        val p10 = arr[(arr.size * 0.10f).toInt()]
+        val p1 = arr[(arr.size * 0.01f).toInt()]
+        val sev = 1f - (0.6f * p10 + 0.4f * p1)
+        return smooth01((sev - 0.05f) / 0.20f)
+    }
+
+    // ---------- finger removal ----------
+
+    /** Settings switch: whiten fingers that hold the page. */
+    @Volatile
+    var removeFingers: Boolean = true
+
+    private class FingerMask(val a: FloatArray, val mw: Int, val mh: Int) {
+        /** Bilinear alpha (0..1) at pixel (x, y) of a w x h page. */
+        fun alphaAt(x: Int, y: Int, w: Int, h: Int): Float {
+            val gx = ((x + 0.5f) * mw / w - 0.5f).coerceIn(0f, mw - 1.001f)
+            val gy = ((y + 0.5f) * mh / h - 0.5f).coerceIn(0f, mh - 1.001f)
+            val x0 = gx.toInt()
+            val y0 = gy.toInt()
+            val fx = gx - x0
+            val fy = gy - y0
+            val i = y0 * mw + x0
+            val top = a[i] * (1f - fx) + a[i + 1] * fx
+            val bot = a[i + mw] * (1f - fx) + a[i + mw + 1] * fx
+            return top * (1f - fy) + bot * fy
+        }
+    }
+
+    /** Warm hue (red..orange or pink), moderate saturation, not too dark or bright: skin of any tone. */
+    private fun isSkin(p: Int): Boolean {
+        val r = (p shr 16) and 255
+        val g = (p shr 8) and 255
+        val b = p and 255
+        val mx = max(r, max(g, b))
+        val mn = min(r, min(g, b))
+        if (mx < 64 || mx > 247) return false
+        val d = (mx - mn).toFloat()
+        val sat = d / mx
+        if (sat < 0.18f || sat > 0.72f) return false
+        var hue = when (mx) {
+            r -> 60f * (((g - b) / d) % 6f)
+            g -> 60f * ((b - r) / d + 2f)
+            else -> 60f * ((r - g) / d + 4f)
+        }
+        if (hue < 0f) hue += 360f
+        return hue <= 40f || hue >= 335f
+    }
+
+    private fun morph3(m: BooleanArray, w: Int, h: Int, erode: Boolean): BooleanArray {
+        val out = BooleanArray(m.size)
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                var all = true
+                var any = false
+                for (yy in max(0, y - 1)..min(h - 1, y + 1)) {
+                    for (xx in max(0, x - 1)..min(w - 1, x + 1)) {
+                        if (m[yy * w + xx]) any = true else all = false
+                    }
+                }
+                out[y * w + x] = if (erode) all else any
+            }
+        }
+        return out
+    }
+
+    /**
+     * Finds skin-coloured blobs that touch the page border (thumbs / fingers holding the sheet).
+     * Thin red or brown ink (removed by the opening), stamps inside the page, and yellowed or brown
+     * paper (too much skin-like area overall) are left alone.
+     */
+    private fun detectFingers(src: Bitmap): FingerMask? {
+        val longSide = max(src.width, src.height)
+        if (longSide < 64) return null
+        val sc = 200f / longSide
+        val mw = (src.width * sc).roundToInt().coerceAtLeast(8)
+        val mh = (src.height * sc).roundToInt().coerceAtLeast(8)
+        var cur = src
+        while (cur.width / 2 >= mw * 2 && cur.height / 2 >= mh * 2) {
+            val next = Bitmap.createScaledBitmap(cur, cur.width / 2, cur.height / 2, true)
+            if (cur !== src) cur.recycle()
+            cur = next
+        }
+        val small = Bitmap.createScaledBitmap(cur, mw, mh, true)
+        if (cur !== src && cur !== small) cur.recycle()
+        val px = IntArray(mw * mh)
+        small.getPixels(px, 0, mw, 0, 0, mw, mh)
+        if (small !== src) small.recycle()
+
+        val total = mw * mh
+        val skin = BooleanArray(total)
+        var cnt = 0
+        for (i in 0 until total) {
+            if (isSkin(px[i])) {
+                skin[i] = true
+                cnt++
+            }
+        }
+        val frac = cnt.toFloat() / total
+        if (frac < 0.002f || frac > 0.30f) return null
+
+        val opened = morph3(morph3(skin, mw, mh, true), mw, mh, false)
+        val visited = BooleanArray(total)
+        val queue = IntArray(total)
+        val keep = BooleanArray(total)
+        var any = false
+        val band = max(2, (0.03f * min(mw, mh)).toInt())
+        for (s0 in 0 until total) {
+            if (!opened[s0] || visited[s0]) continue
+            var head = 0
+            var tail = 0
+            queue[tail++] = s0
+            visited[s0] = true
+            var minX = mw
+            var maxX = 0
+            var minY = mh
+            var maxY = 0
+            while (head < tail) {
+                val i = queue[head++]
+                val x = i % mw
+                val y = i / mw
+                if (x < minX) minX = x
+                if (x > maxX) maxX = x
+                if (y < minY) minY = y
+                if (y > maxY) maxY = y
+                if (x > 0) { val n = i - 1; if (opened[n] && !visited[n]) { visited[n] = true; queue[tail++] = n } }
+                if (x < mw - 1) { val n = i + 1; if (opened[n] && !visited[n]) { visited[n] = true; queue[tail++] = n } }
+                if (y > 0) { val n = i - mw; if (opened[n] && !visited[n]) { visited[n] = true; queue[tail++] = n } }
+                if (y < mh - 1) { val n = i + mw; if (opened[n] && !visited[n]) { visited[n] = true; queue[tail++] = n } }
+            }
+            val areaFrac = tail.toFloat() / total
+            if (areaFrac < 0.002f || areaFrac > 0.12f) continue
+            val touches = minX <= band || minY <= band || maxX >= mw - 1 - band || maxY >= mh - 1 - band
+            if (!touches) continue
+            val bw = maxX - minX + 1
+            val bh = maxY - minY + 1
+            if (tail.toFloat() / (bw * bh) < 0.40f) continue
+            for (k in 0 until tail) keep[queue[k]] = true
+            any = true
+        }
+        if (!any) return null
+        var grown = keep
+        for (n in 0 until 3) grown = morph3(grown, mw, mh, false)
+        var alpha = FloatArray(total) { if (grown[it]) 1f else 0f }
+        alpha = boxBlurSeparable(alpha, mw, mh, 1)
+        alpha = boxBlurSeparable(alpha, mw, mh, 1)
+        return FingerMask(alpha, mw, mh)
+    }
+
+    /**
+     * ENHANCE   : auto-levels (contrast stretch) + light sharpening, keeps colour
+     * NO_SHADOW : shadow removal by dividing by the estimated paper brightness, whitens the page, keeps colour
+     * MAGIC     : shadow removal + paper -> white, ink -> black (CamScanner "Magic Color")
+     * BW        : shadow removal + sharpening + adaptive black/white (crisp text for printing / filing)
+     */
+    private fun process(src: Bitmap, mode: FilterMode): Bitmap {
         val w = src.width
         val h = src.height
-        val (bg, sw, sh) = backgroundMap(src)
+        val useBg = true
+        // Illumination map for every mode: it also tells how strong the shadows really are.
+        val bg: BgMap = backgroundMap(src)
+        val paper = paperLevel(bg)
+        val paperL = (paper[0] * 0.299f + paper[1] * 0.587f + paper[2] * 0.114f).coerceAtLeast(30f)
+        val strength = shadowStrength(bg)
+        val fingers = if (removeFingers) detectFingers(src) else null
+        var lo = 0f
+        var hi = 255f
+        var bwThreshold = 157.5f
+        if (mode == FilterMode.ENHANCE || mode == FilterMode.BW) {
+            val p = levels(src)
+            lo = p.first
+            hi = p.second
+            if (mode == FilterMode.BW) {
+                // binarisation is done per pixel from the local paper level (see BW branch);
+                // the post-sharpen pass only re-smooths around mid-grey
+                bwThreshold = 128f
+            }
+        }
+        // ENHANCE works on the light-corrected image (paper = 255), so its black level is rescaled.
+        val enhLo = (lo * 255f / paperL).coerceIn(0f, 160f)
+        val levelScale = if (mode == FilterMode.ENHANCE) {
+            255f / (255f - enhLo).coerceAtLeast(40f)
+        } else {
+            255f / (hi - lo).coerceAtLeast(40f)
+        }
+        val sw = bg.sw
+        val sh = bg.sh
         val x0 = IntArray(w)
         val fx = FloatArray(w)
-        for (x in 0 until w) {
-            val gx = ((x + 0.5f) * sw / w - 0.5f).coerceIn(0f, sw - 1.001f)
-            x0[x] = gx.toInt()
-            fx[x] = gx - x0[x]
+        if (useBg) {
+            for (x in 0 until w) {
+                val gx = ((x + 0.5f) * sw / w - 0.5f).coerceIn(0f, sw - 1.001f)
+                x0[x] = gx.toInt()
+                fx[x] = gx - x0[x]
+            }
         }
+        val baseSharp = when (mode) {
+            FilterMode.BW -> 0.9f
+            FilterMode.MAGIC -> 0.5f
+            FilterMode.ENHANCE -> 0.6f
+            else -> 0.5f
+        }
+        // deeper shadows lose more edge contrast, so sharpen a little more (not for BW)
+        val sharp = if (mode == FilterMode.BW) baseSharp else baseSharp * (0.8f + 0.4f * strength)
+
         val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val rows = 32
-        val buf = IntArray(w * rows)
+        val inBuf = IntArray(w * (rows + 2))
+        val tm = IntArray(w * (rows + 2))
+        val outBuf = IntArray(w * rows)
         var y = 0
         while (y < h) {
             val n = min(rows, h - y)
-            src.getPixels(buf, 0, w, 0, y, w, n)
-            for (j in 0 until n) {
-                val gy = (((y + j) + 0.5f) * sh / h - 0.5f).coerceIn(0f, sh - 1.001f)
-                val y0 = gy.toInt()
-                val fy = gy - y0
+            for (j in 0 until n + 2) {
+                val ry = (y - 1 + j).coerceIn(0, h - 1)
+                src.getPixels(inBuf, j * w, w, 0, ry, w, 1)
+            }
+            for (j in 0 until n + 2) {
+                val ry = (y - 1 + j).coerceIn(0, h - 1)
+                var y0 = 0
+                var fy = 0f
+                if (useBg) {
+                    val gy = ((ry + 0.5f) * sh / h - 0.5f).coerceIn(0f, sh - 1.001f)
+                    y0 = gy.toInt()
+                    fy = gy - y0
+                }
                 val rowA = y0 * sw
                 val rowB = (y0 + 1) * sw
                 for (x in 0 until w) {
                     val i = j * w + x
-                    val p = buf[i]
-                    val xi = x0[x]
-                    val fxx = fx[x]
-                    val top = bg[rowA + xi] * (1 - fxx) + bg[rowA + xi + 1] * fxx
-                    val bot = bg[rowB + xi] * (1 - fxx) + bg[rowB + xi + 1] * fxx
-                    val b0 = top * (1 - fy) + bot * fy
-                    val k = 255f / b0.coerceAtLeast(50f)
+                    val p = inBuf[i]
                     val r = (p shr 16) and 255
                     val g = (p shr 8) and 255
                     val b = p and 255
-                    val rr: Float
-                    val gg: Float
-                    val bb: Float
+
+                    var normR = r.toFloat()
+                    var normG = g.toFloat()
+                    var normB = b.toFloat()
+                    var lumScale = 1f
+
+                    if (useBg) {
+                        val xi = x0[x]
+                        val fxx = fx[x]
+
+                        val topR = bg.r[rowA + xi] * (1 - fxx) + bg.r[rowA + xi + 1] * fxx
+                        val botR = bg.r[rowB + xi] * (1 - fxx) + bg.r[rowB + xi + 1] * fxx
+                        val bValR = (topR * (1 - fy) + botR * fy).coerceAtLeast(30f)
+
+                        val topG = bg.g[rowA + xi] * (1 - fxx) + bg.g[rowA + xi + 1] * fxx
+                        val botG = bg.g[rowB + xi] * (1 - fxx) + bg.g[rowB + xi + 1] * fxx
+                        val bValG = (topG * (1 - fy) + botG * fy).coerceAtLeast(30f)
+
+                        val topB = bg.b[rowA + xi] * (1 - fxx) + bg.b[rowA + xi + 1] * fxx
+                        val botB = bg.b[rowB + xi] * (1 - fxx) + bg.b[rowB + xi + 1] * fxx
+                        val bValB = (topB * (1 - fy) + botB * fy).coerceAtLeast(30f)
+
+                        // Auto strength: a lighting variation below ~4% is ignored (the page is divided by one
+                        // constant paper level, no halos); from ~12% it is corrected fully; in between it fades in.
+                        val bL = bValR * 0.299f + bValG * 0.587f + bValB * 0.114f
+                        val wt = smooth01((abs(bL / paperL - 1f) - 0.04f) / 0.08f)
+                        val eR = (paper[0] + (bValR - paper[0]) * wt).coerceAtLeast(30f)
+                        val eG = (paper[1] + (bValG - paper[1]) * wt).coerceAtLeast(30f)
+                        val eB = (paper[2] + (bValB - paper[2]) * wt).coerceAtLeast(30f)
+                        normR = min(255f, (r / eR) * 255f)
+                        normG = min(255f, (g / eG) * 255f)
+                        normB = min(255f, (b / eB) * 255f)
+                        lumScale = 255f / (paperL + (bL - paperL) * wt).coerceAtLeast(30f)
+                    }
+
+                    val normL = normR * 0.299f + normG * 0.587f + normB * 0.114f
+
+                    var rr: Int
+                    var gg: Int
+                    var bb: Int
                     when (mode) {
-                        FilterMode.MAGIC -> {
-                            rr = enhance(r * k); gg = enhance(g * k); bb = enhance(b * k)
-                        }
                         FilterMode.NO_SHADOW -> {
-                            rr = soft(r * k); gg = soft(g * k); bb = soft(b * k)
+                            var whiteGain = 0f
+                            if (normL >= 205f) {
+                                val t = ((normL - 205f) / 45f).coerceIn(0f, 1f)
+                                whiteGain = t * t * (3f - 2f * t)
+                            }
+                            var finalR = normR + (255f - normR) * whiteGain
+                            var finalG = normG + (255f - normG) * whiteGain
+                            var finalB = normB + (255f - normB) * whiteGain
+
+                            if (normL < 200f) {
+                                val darkL = CONTRAST_LUT[normL.toInt().coerceIn(0, 255)]
+                                val gain = darkL / max(normL, 1f)
+                                finalR *= gain
+                                finalG *= gain
+                                finalB *= gain
+                            }
+
+                            val softGamma = if (normL < 160f) 1.2f else 1.05f
+                            finalR = ((finalR / 255f).pow(softGamma) * 255f).coerceIn(0f, 255f)
+                            finalG = ((finalG / 255f).pow(softGamma) * 255f).coerceIn(0f, 255f)
+                            finalB = ((finalB / 255f).pow(softGamma) * 255f).coerceIn(0f, 255f)
+
+                            rr = finalR.toInt().coerceIn(0, 255)
+                            gg = finalG.toInt().coerceIn(0, 255)
+                            bb = finalB.toInt().coerceIn(0, 255)
                         }
-                        FilterMode.GRAY -> {
-                            val v = enhance((r * 0.299f + g * 0.587f + b * 0.114f) * k)
+                        FilterMode.BW -> {
+                            val isBlue = (normB - normR > 10f) && (normB - normG > 5f)
+                            val inkVal = if (isBlue) {
+                                min(normL, normR * 0.72f + normL * 0.28f)
+                            } else {
+                                normL
+                            }
+                            // normL/inkVal are already divided by the local paper level (paper ~ 255),
+                            // so the threshold must live in that same normalised domain.
+                            // 195 +- 32: <=163 -> black, >=227 -> white (keeps faint dot-matrix ink)
+                            val tt = ((inkVal - 163f) / 64f).coerceIn(0f, 1f)
+                            val v = (255f * tt * tt * (3f - 2f * tt)).toInt()
                             rr = v; gg = v; bb = v
                         }
-                        else -> {
-                            val gv = (r * 0.299f + g * 0.587f + b * 0.114f) * k
-                            val t = ((gv - 105f) / (190f - 105f)).coerceIn(0f, 1f)
-                            val v = 255f * t * t * (3f - 2f * t)
-                            rr = v; gg = v; bb = v
+                        FilterMode.MAGIC -> {
+                            // normalised paper ~255, faint ink ~140..200.
+                            // 1) levels: <= BP -> pure black, >= WP -> paper-white, gamma 1.2 in between
+                            //    (colour is kept by scaling all three channels with the same gain).
+                            val bp = 135f
+                            val wp = 215f
+                            val tl = ((normL - bp) / (wp - bp)).coerceIn(0f, 1f)
+                            val gl = 255f * tl.pow(1.2f)
+                            val gain = gl / max(normL, 1f)
+                            var fR = normR * gain
+                            var fG = normG * gain
+                            var fB = normB * gain
+                            // 2) near-paper pixels: remove the remaining tint
+                            if (normL > 205f) {
+                                val t = ((normL - 205f) / 30f).coerceIn(0f, 1f)
+                                val tw = t * t * (3f - 2f * t)
+                                fR += (255f - fR) * 0.92f * tw
+                                fG += (255f - fG) * 0.92f * tw
+                                fB += (255f - fB) * 0.92f * tw
+                            }
+                            rr = fR.toInt().coerceIn(0, 255)
+                            gg = fG.toInt().coerceIn(0, 255)
+                            bb = fB.toInt().coerceIn(0, 255)
+                        }
+                        FilterMode.ENHANCE -> {
+                            // colour-preserving: all three channels get the same light correction
+                            val re = ((min(255f, r * lumScale) - enhLo) * levelScale).coerceIn(0f, 255f)
+                            val ge = ((min(255f, g * lumScale) - enhLo) * levelScale).coerceIn(0f, 255f)
+                            val be = ((min(255f, b * lumScale) - enhLo) * levelScale).coerceIn(0f, 255f)
+                            val le = re * 0.299f + ge * 0.587f + be * 0.114f
+
+                            // stronger text deepening when the capture had stronger shadows
+                            val boost = if (le < 130f) 1.18f + 0.14f * strength else if (le > 210f) 0.96f else 1.08f
+                            val rrF = ((re / 255f).pow(boost) * 255f).coerceIn(0f, 255f)
+                            val ggF = ((ge / 255f).pow(boost) * 255f).coerceIn(0f, 255f)
+                            val bbF = ((be / 255f).pow(boost) * 255f).coerceIn(0f, 255f)
+
+                            if (le < 200f) {
+                                val darkL = CONTRAST_LUT[le.toInt().coerceIn(0, 255)]
+                                val gain = darkL / max(le, 1f)
+                                rr = (rrF * gain).toInt().coerceIn(0, 255)
+                                gg = (ggF * gain).toInt().coerceIn(0, 255)
+                                bb = (bbF * gain).toInt().coerceIn(0, 255)
+                            } else {
+                                rr = rrF.toInt().coerceIn(0, 255)
+                                gg = ggF.toInt().coerceIn(0, 255)
+                                bb = bbF.toInt().coerceIn(0, 255)
+                            }
+                        }
+                        else -> { rr = r; gg = g; bb = b }
+                    }
+                    if (fingers != null) {
+                        val fa = fingers.alphaAt(x, ry, w, h)
+                        if (fa > 0.01f) {
+                            rr = (rr + (255 - rr) * fa).toInt().coerceIn(0, 255)
+                            gg = (gg + (255 - gg) * fa).toInt().coerceIn(0, 255)
+                            bb = (bb + (255 - bb) * fa).toInt().coerceIn(0, 255)
                         }
                     }
-                    buf[i] = (0xFF shl 24) or (rr.toInt() shl 16) or (gg.toInt() shl 8) or bb.toInt()
+                    tm[i] = (rr shl 16) or (gg shl 8) or bb
                 }
             }
-            out.setPixels(buf, 0, w, 0, y, w, n)
+            for (j in 1..n) {
+                for (x in 0 until w) {
+                    val c = tm[j * w + x]
+                    val up = tm[(j - 1) * w + x]
+                    val dn = tm[(j + 1) * w + x]
+                    val lf = tm[j * w + max(x - 1, 0)]
+                    val rt = tm[j * w + min(x + 1, w - 1)]
+                    val r2 = sharpenCh(c, up, dn, lf, rt, 16, sharp)
+                    val o = (j - 1) * w + x
+                    if (mode == FilterMode.BW) {
+                        val t = ((r2 - (bwThreshold - 36f)) / 72f).coerceIn(0f, 1f)
+                        val v = (255f * t * t * (3f - 2f * t)).toInt()
+                        outBuf[o] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+                    } else {
+                        val g2 = sharpenCh(c, up, dn, lf, rt, 8, sharp)
+                        val b2 = sharpenCh(c, up, dn, lf, rt, 0, sharp)
+                        outBuf[o] = (0xFF shl 24) or (r2 shl 16) or (g2 shl 8) or b2
+                    }
+                }
+            }
+            out.setPixels(outBuf, 0, w, 0, y, w, n)
             y += n
         }
         return out

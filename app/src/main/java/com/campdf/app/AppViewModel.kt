@@ -3,7 +3,9 @@ package com.campdf.app
 import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -16,6 +18,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -42,17 +47,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var showDiscard by mutableStateOf(false)
     var exportQuality by mutableIntStateOf(prefs.quality)
     var signatureVersion by mutableIntStateOf(0)
+    var viewerDoc by mutableStateOf<DocItem?>(null)
+    var editingDoc by mutableStateOf<DocItem?>(null)
 
     // settings
     var themeMode by mutableIntStateOf(prefs.theme)
     var defaultQuality by mutableIntStateOf(prefs.quality)
     var autoDetect by mutableStateOf(prefs.autoDetect)
-    var snapA4 by mutableStateOf(prefs.snapA4)
+    var removeFingers by mutableStateOf(prefs.removeFingers)
     var appLock by mutableStateOf(prefs.appLock)
 
     private var idCounter = System.currentTimeMillis()
 
-    init { refreshDocs() }
+    init {
+        Imaging.removeFingers = prefs.removeFingers
+        refreshDocs()
+    }
 
     private fun err() = getApplication<Application>().getString(R.string.error_generic)
 
@@ -80,12 +90,61 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             Screen.Review -> if (pages.isEmpty()) screen = Screen.Home else showDiscard = true
             Screen.SignPad, Screen.SignPlace -> screen = Screen.Review
             Screen.Export -> screen = Screen.Review
+            Screen.Viewer -> screen = Screen.Home
             Screen.Settings -> screen = Screen.Home
             else -> Unit
         }
     }
 
+    // ---------- viewer / edit existing document ----------
+
+    /** Re-opens a saved PDF for editing: every page is rendered back into an editable page. */
+    fun editDoc(doc: DocItem) {
+        clearSession()
+        viewModelScope.launch {
+            busy = true
+            val loaded = withContext(Dispatchers.IO) {
+                runCatching {
+                    val result = ArrayList<PageItem>()
+                    val pfd = ParcelFileDescriptor.open(doc.file, ParcelFileDescriptor.MODE_READ_ONLY)
+                    val renderer = PdfRenderer(pfd)
+                    try {
+                        for (i in 0 until renderer.pageCount) {
+                            renderer.openPage(i).use { page ->
+                                val w = 2000
+                                val h = (w.toFloat() * page.height / page.width).toInt().coerceAtLeast(1)
+                                val bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                                bm.eraseColor(android.graphics.Color.WHITE)
+                                page.render(bm, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                                val id = idCounter++
+                                val f = File(cache, "page_$id.jpg")
+                                Imaging.saveJpeg(bm, f, 92)
+                                bm.recycle()
+                                result.add(PageItem(id, f.absolutePath, f.absolutePath, null, 0, FilterMode.ORIGINAL))
+                            }
+                        }
+                    } finally {
+                        runCatching { renderer.close() }
+                        runCatching { pfd.close() }
+                    }
+                    result
+                }.getOrNull()
+            }
+            busy = false
+            if (loaded.isNullOrEmpty()) { message = err(); return@launch }
+            pages.addAll(loaded)
+            editingDoc = doc
+            selected = 0
+            screen = Screen.Review
+        }
+    }
+
     // ---------- library ----------
+
+    fun openViewer(doc: DocItem) {
+        viewerDoc = doc
+        screen = Screen.Viewer
+    }
 
     fun refreshDocs() {
         viewModelScope.launch { docs = withContext(Dispatchers.IO) { repo.list() } }
@@ -174,12 +233,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val result = withContext(Dispatchers.Default) {
                 runCatching {
                     val src = Imaging.loadOriented(raw, 3600) ?: error("load")
-                    val warped = Imaging.warp(src, c, 3508, snapA4)
-                    src.recycle()
+                    val warped = try { Imaging.warp(src, c, 3508) } finally { src.recycle() }
                     val id = idCounter++
                     val f = File(cache, "page_$id.jpg")
-                    Imaging.saveJpeg(warped, f, 92)
-                    warped.recycle()
+                    try { Imaging.saveJpeg(warped, f, 94) } finally { warped.recycle() }
                     Pair(id, f.absolutePath)
                 }.getOrNull()
             }
@@ -261,12 +318,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 runCatching {
                     val base = Imaging.pageBitmap(page, 3508, withFilter = false) ?: error("page")
                     val sig = BitmapFactory.decodeFile(repo.signatureFile.absolutePath) ?: error("sig")
-                    val out = Imaging.stamp(base, sig, fx, fy, fw)
-                    base.recycle()
-                    sig.recycle()
+                    val out = try { Imaging.stamp(base, sig, fx, fy, fw) } finally {
+                        base.recycle()
+                        sig.recycle()
+                    }
                     val f = File(cache, "page_${idCounter++}.jpg")
-                    Imaging.saveJpeg(out, f, 92)
-                    out.recycle()
+                    try { Imaging.saveJpeg(out, f, 94) } finally { out.recycle() }
                     f.absolutePath
                 }.getOrNull()
             }
@@ -279,18 +336,40 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- PDF ----------
 
+    /**
+     * High: 3508 px / quality 94 for A4-scale printing; Balanced: 3000 px / quality 92;
+     * Compact: 2000 px / quality 82. The higher JPEG floors preserve small text and thin strokes.
+     */
     private fun buildPdf(target: File, list: List<PageItem>, quality: Int) {
-        val (maxDim, jq) = when (quality) {
-            0 -> 3508 to 88
-            1 -> 2339 to 80
-            else -> 1754 to 70
+        val (maxDim, jpegQuality) = when (quality) {
+            0 -> 3508 to 94
+            1 -> 3000 to 92
+            else -> 2000 to 82
         }
         PdfWriter.write(target, list.size) { i ->
             val bm = Imaging.pageBitmap(list[i], maxDim) ?: error("render")
-            val bytes = Imaging.toJpeg(bm, jq)
-            val page = PdfPage(bytes, bm.width, bm.height)
-            bm.recycle()
-            page
+            try {
+                PdfPage(Imaging.toJpeg(bm, jpegQuality), bm.width, bm.height)
+            } finally {
+                bm.recycle()
+            }
+        }
+    }
+
+    /** Write beside the destination, then replace it only after a complete PDF was generated. */
+    private fun writePdfSafely(target: File, list: List<PageItem>, quality: Int) {
+        val parent = target.parentFile ?: repo.dir
+        if (!parent.exists() && !parent.mkdirs()) error("Cannot create PDF directory")
+        val temp = File(parent, ".${target.name}.${System.nanoTime()}.tmp")
+        try {
+            buildPdf(temp, list, quality)
+            try {
+                Files.move(temp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            if (temp.exists()) temp.delete()
         }
     }
 
@@ -298,13 +377,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (pages.isEmpty()) return
         val snapshot = pages.toList()
         val quality = defaultQuality
+        val editing = editingDoc
         viewModelScope.launch {
             busy = true
             val doc = withContext(Dispatchers.IO) {
                 runCatching {
-                    val file = repo.newFile(repo.defaultName())
-                    buildPdf(file, snapshot, quality)
-                    repo.writeMeta(file, snapshot.size, Imaging.pageBitmap(snapshot[0], 360))
+                    val file = editing?.file ?: repo.newFile(repo.defaultName())
+                    writePdfSafely(file, snapshot, quality)
+                    val thumbBitmap = Imaging.pageBitmap(snapshot[0], 360)
+                    try { repo.writeMeta(file, snapshot.size, thumbBitmap) } finally { thumbBitmap?.recycle() }
                     DocItem(
                         file, file.nameWithoutExtension, snapshot.size, file.length(), file.lastModified(),
                         File(repo.dir, file.name + ".jpg").takeIf { it.exists() }
@@ -327,11 +408,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (snapshot.isEmpty()) return
         viewModelScope.launch {
             busy = true
-            val ok = withContext(Dispatchers.IO) { runCatching { buildPdf(doc.file, snapshot, q) }.isSuccess }
+            val ok = withContext(Dispatchers.IO) {
+                runCatching { writePdfSafely(doc.file, snapshot, q) }.isSuccess
+            }
             busy = false
             if (ok) {
                 exportQuality = q
-                exported = doc.copy(size = doc.file.length())
+                exported = doc.copy(size = doc.file.length(), modified = doc.file.lastModified())
                 refreshDocs()
             } else {
                 message = err()
@@ -364,6 +447,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         pages.clear()
         cropQueue.clear()
         cropEditIndex = null
+        editingDoc = null
         selected = 0
         cache.listFiles()?.forEach {
             if (it.name.startsWith("raw_") || it.name.startsWith("imp_") || it.name.startsWith("page_")) it.delete()
@@ -375,6 +459,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setTheme(v: Int) { themeMode = v; prefs.theme = v }
     fun updateDefaultQuality(v: Int) { defaultQuality = v; prefs.quality = v }
     fun updateAutoDetect(v: Boolean) { autoDetect = v; prefs.autoDetect = v }
-    fun updateSnapA4(v: Boolean) { snapA4 = v; prefs.snapA4 = v }
+    fun updateRemoveFingers(v: Boolean) {
+        removeFingers = v
+        prefs.removeFingers = v
+        Imaging.removeFingers = v
+    }
     fun updateAppLock(v: Boolean) { appLock = v; prefs.appLock = v }
 }

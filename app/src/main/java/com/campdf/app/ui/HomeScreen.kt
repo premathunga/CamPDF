@@ -143,7 +143,8 @@ fun HomeScreen(vm: AppViewModel) {
                     items(list, key = { it.file.name }) { doc ->
                         DocRow(
                             doc,
-                            onOpen = { openPdf(ctx, vm, doc.file) },
+                            onOpen = { vm.openViewer(doc) },
+                            onEdit = { vm.editDoc(doc) },
                             onShare = { sharePdf(ctx, vm, doc.file) },
                             onRename = { renameDoc = doc },
                             onDelete = { deleteDoc = doc }
@@ -219,6 +220,7 @@ private fun DocRow(
     doc: DocItem,
     onOpen: () -> Unit,
     onShare: () -> Unit,
+    onEdit: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -274,6 +276,11 @@ private fun DocRow(
                         text = { Text(stringResource(R.string.share)) },
                         leadingIcon = { Icon(Icons.Rounded.Share, null) },
                         onClick = { menu = false; onShare() }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.edit_pages)) },
+                        leadingIcon = { Icon(Icons.Rounded.Description, null) },
+                        onClick = { menu = false; onEdit() }
                     )
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.rename)) },

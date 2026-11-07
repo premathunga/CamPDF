@@ -102,7 +102,7 @@ fun SettingsScreen(vm: AppViewModel) {
             AppCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     SwitchRow(stringResource(R.string.auto_detect), stringResource(R.string.auto_detect_d), vm.autoDetect) { vm.updateAutoDetect(it) }
-                    SwitchRow(stringResource(R.string.snap_a4), stringResource(R.string.snap_a4_d), vm.snapA4) { vm.updateSnapA4(it) }
+                    SwitchRow(stringResource(R.string.remove_fingers), stringResource(R.string.remove_fingers_d), vm.removeFingers) { vm.updateRemoveFingers(it) }
                     SwitchRow(stringResource(R.string.app_lock), stringResource(R.string.app_lock_d), vm.appLock) { want ->
                         if (!want) {
                             vm.updateAppLock(false)

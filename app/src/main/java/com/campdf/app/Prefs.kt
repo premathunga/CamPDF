@@ -23,10 +23,10 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("auto_detect", true)
         set(v) { sp.edit().putBoolean("auto_detect", v).apply() }
 
-    /** Snap pages that are close to A4 proportions to exact A4. */
-    var snapA4: Boolean
-        get() = sp.getBoolean("snap_a4", true)
-        set(v) { sp.edit().putBoolean("snap_a4", v).apply() }
+    /** Whiten fingers that hold the page (on by default). */
+    var removeFingers: Boolean
+        get() = sp.getBoolean("remove_fingers", true)
+        set(v) { sp.edit().putBoolean("remove_fingers", v).apply() }
 
     var appLock: Boolean
         get() = sp.getBoolean("app_lock", false)

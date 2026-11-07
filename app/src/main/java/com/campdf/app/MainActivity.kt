@@ -40,6 +40,7 @@ import com.campdf.app.ui.ReviewScreen
 import com.campdf.app.ui.SettingsScreen
 import com.campdf.app.ui.SignPadScreen
 import com.campdf.app.ui.SignPlaceScreen
+import com.campdf.app.ui.ViewerScreen
 import com.campdf.app.ui.WelcomeScreen
 
 class MainActivity : AppCompatActivity() {
@@ -113,6 +114,7 @@ private fun Root(vm: AppViewModel) {
         when (vm.screen) {
             Screen.Welcome -> WelcomeScreen { vm.completeWelcome() }
             Screen.Home -> HomeScreen(vm)
+            Screen.Viewer -> ViewerScreen(vm)
             Screen.Camera -> CameraScreen(vm)
             Screen.Crop -> CropScreen(vm)
             Screen.Review -> ReviewScreen(vm)
