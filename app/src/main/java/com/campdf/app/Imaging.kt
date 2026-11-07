@@ -464,7 +464,7 @@ object Imaging {
         }
         val sharp = when (mode) {
             FilterMode.BW -> 0.9f
-            FilterMode.MAGIC -> 0.7f
+            FilterMode.MAGIC -> 0.5f
             FilterMode.ENHANCE -> 0.6f
             else -> 0.5f
         }
@@ -573,11 +573,12 @@ object Imaging {
                         }
                         FilterMode.MAGIC -> {
                             // normalised paper ~255, faint ink ~140..200.
-                            // 1) tone curve: everything >= KNEE becomes paper-white, below it a steep
-                            //    gamma pulls ink toward black (colour is kept by scaling all channels).
-                            val knee = 228f
-                            val gl = if (normL >= knee) 255f
-                            else 255f * (normL / knee).pow(2.6f)
+                            // 1) levels: <= BP -> pure black, >= WP -> paper-white, gamma 1.2 in between
+                            //    (colour is kept by scaling all three channels with the same gain).
+                            val bp = 135f
+                            val wp = 215f
+                            val tl = ((normL - bp) / (wp - bp)).coerceIn(0f, 1f)
+                            val gl = 255f * tl.pow(1.2f)
                             val gain = gl / max(normL, 1f)
                             var fR = normR * gain
                             var fG = normG * gain

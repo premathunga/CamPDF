@@ -333,13 +333,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ---------- PDF ----------
 
     /**
-     * High: 3508 px / quality 94 for A4-scale printing; Balanced: 3000 px / quality 88;
+     * High: 3508 px / quality 94 for A4-scale printing; Balanced: 3000 px / quality 92;
      * Compact: 2000 px / quality 82. The higher JPEG floors preserve small text and thin strokes.
      */
     private fun buildPdf(target: File, list: List<PageItem>, quality: Int) {
         val (maxDim, jpegQuality) = when (quality) {
             0 -> 3508 to 94
-            1 -> 3000 to 88
+            1 -> 3000 to 92
             else -> 2000 to 82
         }
         PdfWriter.write(target, list.size) { i ->
