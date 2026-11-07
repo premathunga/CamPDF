@@ -36,11 +36,13 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.campdf.app.AppViewModel
@@ -50,6 +52,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private val INSET = floatArrayOf(0.08f, 0.08f, 0.92f, 0.08f, 0.92f, 0.92f, 0.08f, 0.92f)
 private val FULL = floatArrayOf(0.03f, 0.03f, 0.97f, 0.03f, 0.97f, 0.97f, 0.03f, 0.97f)
@@ -192,6 +195,41 @@ fun CropScreen(vm: AppViewModel) {
                             drawCircle(Color.White, 15.dp.toPx(), it)
                             drawCircle(primary, 11.dp.toPx(), it)
                             drawCircle(Color.White, 3.dp.toPx(), it)
+                        }
+                    }
+                    // Magnifier: the finger hides the corner being dragged, so show it 3x zoomed.
+                    if (active >= 0 && boxSize.width > 0 && boxSize.height > 0) {
+                        Canvas(Modifier.fillMaxSize()) {
+                            val cp = pts[active]
+                            val r = 56.dp.toPx()
+                            val zoom = 3f
+                            val px = cp.x * size.width
+                            val py = cp.y * size.height
+                            val lx = px.coerceIn(r, (size.width - r).coerceAtLeast(r))
+                            var ly = py - r * 2.1f
+                            if (ly - r < 0f) ly = py + r * 2.1f
+                            ly = ly.coerceIn(r, (size.height - r).coerceAtLeast(r))
+                            val srcW = ((2f * r / zoom) * im.width / size.width).coerceAtMost(im.width.toFloat())
+                            val srcH = ((2f * r / zoom) * im.height / size.height).coerceAtMost(im.height.toFloat())
+                            val srcX = (cp.x * im.width - srcW / 2f).coerceIn(0f, im.width - srcW)
+                            val srcY = (cp.y * im.height - srcH / 2f).coerceIn(0f, im.height - srcH)
+                            val circle = Path().apply { addOval(Rect(lx - r, ly - r, lx + r, ly + r)) }
+                            drawCircle(Color.Black, r + 3.dp.toPx(), Offset(lx, ly))
+                            clipPath(circle) {
+                                drawImage(
+                                    im,
+                                    srcOffset = IntOffset(srcX.roundToInt(), srcY.roundToInt()),
+                                    srcSize = IntSize(srcW.roundToInt().coerceAtLeast(1), srcH.roundToInt().coerceAtLeast(1)),
+                                    dstOffset = IntOffset((lx - r).roundToInt(), (ly - r).roundToInt()),
+                                    dstSize = IntSize((2f * r).roundToInt(), (2f * r).roundToInt())
+                                )
+                                // crosshair on the exact corner position
+                                val hx = lx - r + ((cp.x * im.width - srcX) / srcW) * 2f * r
+                                val hy = ly - r + ((cp.y * im.height - srcY) / srcH) * 2f * r
+                                drawLine(primary, Offset(hx - 14.dp.toPx(), hy), Offset(hx + 14.dp.toPx(), hy), 1.5.dp.toPx())
+                                drawLine(primary, Offset(hx, hy - 14.dp.toPx()), Offset(hx, hy + 14.dp.toPx()), 1.5.dp.toPx())
+                            }
+                            drawCircle(Color.White, r, Offset(lx, ly), style = Stroke(width = 2.dp.toPx()))
                         }
                     }
                 }

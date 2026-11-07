@@ -173,16 +173,7 @@ object DocDetect {
             dxs[i] = dx
             dys[i] = dy
         }
-        val out = ArrayList<Pt>(4)
-        for (i in 0 until 4) {
-            val j = (i + 3) % 4 // side ending at corner i
-            val cr = dxs[j] * dys[i] - dys[j] * dxs[i]
-            if (abs(cr) < 1e-3f) return q
-            val t = ((ox[i] - ox[j]) * dys[i] - (oy[i] - oy[j]) * dxs[i]) / cr
-            val p = Pt(ox[j] + dxs[j] * t, oy[j] + dys[j] * t)
-            if (hypot(p.x - q[i].x, p.y - q[i].y) > 14f) return q
-            out.add(p)
-        }
+        val out = intersectSides(ox, oy, dxs, dys, q, 14f) ?: return q
         return if (anglesOk(out)) out else q
     }
 
@@ -637,6 +628,61 @@ object DocDetect {
         return min(1f, (sum / cnt) / 120f)
     }
 
+    /** Corner i = intersection of side i-1 and side i (each given as point + direction). */
+    private fun intersectSides(
+        ox: FloatArray, oy: FloatArray, dxs: FloatArray, dys: FloatArray,
+        orig: List<Pt>, maxMove: Float
+    ): List<Pt>? {
+        val out = ArrayList<Pt>(4)
+        for (i in 0 until 4) {
+            val j = (i + 3) % 4
+            val cr = dxs[j] * dys[i] - dys[j] * dxs[i]
+            if (abs(cr) < 1e-3f) return null
+            val t = ((ox[i] - ox[j]) * dys[i] - (oy[i] - oy[j]) * dxs[i]) / cr
+            val p = Pt(ox[j] + dxs[j] * t, oy[j] + dys[j] * t)
+            if (hypot(p.x - orig[i].x, p.y - orig[i].y) > maxMove) return null
+            out.add(p)
+        }
+        return out
+    }
+
+    /**
+     * Pushes every side outward until it touches the convex hull of the page region (at most `cap` px),
+     * so a page whose edge bulges/curls between the corners is not cut off.
+     */
+    private fun circumscribe(q: List<Pt>, hull: List<Pt>, cap: Float): List<Pt> {
+        var cx = 0f
+        var cy = 0f
+        for (p in q) { cx += p.x; cy += p.y }
+        cx /= 4f
+        cy /= 4f
+        val ox = FloatArray(4)
+        val oy = FloatArray(4)
+        val dxs = FloatArray(4)
+        val dys = FloatArray(4)
+        for (i in 0 until 4) {
+            val a = q[i]
+            val b = q[(i + 1) % 4]
+            val dx = b.x - a.x
+            val dy = b.y - a.y
+            val len = max(1e-3f, hypot(dx, dy))
+            var nx = -dy / len
+            var ny = dx / len
+            if (nx * ((a.x + b.x) / 2f - cx) + ny * ((a.y + b.y) / 2f - cy) < 0f) { nx = -nx; ny = -ny }
+            var far = 0f
+            for (p in hull) {
+                val d = (p.x - a.x) * nx + (p.y - a.y) * ny
+                if (d > far) far = d
+            }
+            val push = min(far, cap)
+            ox[i] = a.x + nx * push
+            oy[i] = a.y + ny * push
+            dxs[i] = dx
+            dys[i] = dy
+        }
+        return intersectSides(ox, oy, dxs, dys, q, cap * 3f) ?: q
+    }
+
     private fun evaluate(mask: BooleanArray, w: Int, h: Int, mag: FloatArray, expand: Float): Cand? {
         val comp = largestComponent(mask, w, h) ?: return null
         val total = w * h
@@ -679,7 +725,7 @@ object DocDetect {
         if (fill < 0.70f) return null
 
         val quad = bestQuad(simplify(hull, 28)) ?: return null
-        val ordered = orderCorners(quad)
+        val ordered = circumscribe(orderCorners(quad), hull, 0.03f * min(w, h))
         if (!anglesOk(ordered)) return null
 
         var cx = 0f
