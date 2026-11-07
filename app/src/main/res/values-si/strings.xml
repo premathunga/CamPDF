@@ -94,4 +94,5 @@
     <string name="filter_enhance">වැඩිදියුණු</string>
     <string name="filter_noshadow">සෙවණැලි රහිත</string>
     <string name="viewer_error">මෙම PDF විවෘත කළ නොහැක</string>
+    <string name="auto_failed_hint">පිටුවේ දාර ස්වයංක්‍රීයව හඳුනාගත නොහැකි විය. කොන් අදිමින් පිටුවට ගළපන්න.</string>
 </resources>

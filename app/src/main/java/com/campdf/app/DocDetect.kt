@@ -16,16 +16,23 @@ import kotlin.math.sqrt
  *  Geometry : largest component -> boundary points -> convex hull -> Visvalingam
  *             -> max-area quad -> order TL,TR,BR,BL -> angle sanity (45..135 deg)
  *             -> fill >= 0.70 -> aspect prior (Zhang-He) -> score.
+ *  v2.1   : skin-tone exclusion (fingers), ink-density channel (white-on-white), edge snapping
+ *           of the final quad, and detectOrNull() so the UI can warn when nothing was found.
  * Output: normalized TL, TR, BR, BL (x, y) = 8 floats.
  */
 object DocDetect {
 
     private class Pt(val x: Float, val y: Float)
-    private class Cand(val pts: FloatArray, val score: Float)
+    private class Cand(val pts: FloatArray, val score: Float, val quad: List<Pt>)
 
-    fun detect(path: String): FloatArray {
-        val fallback = floatArrayOf(0.04f, 0.04f, 0.96f, 0.04f, 0.96f, 0.96f, 0.04f, 0.96f)
-        val bm = Imaging.loadOriented(path, 400) ?: return fallback
+    private val FALLBACK = floatArrayOf(0.08f, 0.08f, 0.92f, 0.08f, 0.92f, 0.92f, 0.08f, 0.92f)
+
+    /** Always returns a quad (inset fallback when detection fails). */
+    fun detect(path: String): FloatArray = detectOrNull(path) ?: FALLBACK.copyOf()
+
+    /** Returns null when no page could be found with enough confidence. */
+    fun detectOrNull(path: String): FloatArray? {
+        val bm = Imaging.loadOriented(path, 400) ?: return null
         val w = bm.width
         val h = bm.height
         val total = w * h
@@ -38,27 +45,145 @@ object DocDetect {
         }
         val g = gaussBlur(gray, w, h)
         val mag = sobel(g, w, h)
+        val skin = skinMask(px, w, h)
 
         val cands = ArrayList<Cand>()
-        fun tryMask(m: BooleanArray?, expand: Float) {
+        fun tryMask(m: BooleanArray?, expand: Float, mult: Float = 1f) {
             if (m == null) return
             val c = evaluate(m, w, h, mag, expand) ?: return
-            cands.add(c)
+            cands.add(if (mult == 1f) c else Cand(c.pts, c.score * mult, c.quad))
         }
 
-        val bright = brightMask(g, w, h)
-        val border = borderDistMask(px, w, h)
+        val bright = withoutSkin(brightMask(g, w, h), skin)
+        val border = withoutSkin(borderDistMask(px, w, h, skin), skin)
         tryMask(bright, 0f)
         tryMask(border, 0f)
         if (bright != null && border != null) {
             val both = BooleanArray(total) { bright[it] && border[it] }
             tryMask(both, 0f)
         }
-        tryMask(chromaMask(px, g, w, h), 0f)
+        tryMask(withoutSkin(chromaMask(px, g, w, h), skin), 0f)
         tryMask(edgeMask(mag, w, h), 2.5f)
+        // white page on a white wall: printed/typed text density marks the page area
+        tryMask(inkMask(g, w, h, skin), 0.02f * min(w, h), 0.85f)
 
-        val best = cands.maxByOrNull { it.score } ?: return fallback
-        return if (best.score >= 0.20f) best.pts else fallback
+        val best = cands.maxByOrNull { it.score } ?: return null
+        if (best.score < 0.20f) return null
+        val snapped = refineQuad(best.quad, mag, w, h)
+        return toNorm(snapped, w, h)
+    }
+
+    private fun toNorm(q: List<Pt>, w: Int, h: Int): FloatArray {
+        val out = FloatArray(8)
+        for (i in 0 until 4) {
+            out[2 * i] = ((q[i].x + 0.5f) / w).coerceIn(0f, 1f)
+            out[2 * i + 1] = ((q[i].y + 0.5f) / h).coerceIn(0f, 1f)
+        }
+        return out
+    }
+
+    // ---------- skin (fingers) ----------
+
+    /**
+     * Heuristic skin detector (any skin tone: warm hue, clearly saturated, not yellowed paper).
+     * Returns a slightly dilated mask, or null when there is little skin or so much of it that it
+     * is probably a brown table rather than a finger.
+     */
+    private fun skinMask(px: IntArray, w: Int, h: Int): BooleanArray? {
+        val total = w * h
+        var n = 0
+        val m = BooleanArray(total) {
+            val p = px[it]
+            val r = (p shr 16) and 255
+            val gr = (p shr 8) and 255
+            val b = p and 255
+            val mx = max(r, max(gr, b))
+            val mn = min(r, min(gr, b))
+            val sat = if (mx > 0) (mx - mn).toFloat() / mx else 0f
+            val skin = r > gr && gr.toFloat() >= b * 0.85f && r - b >= 30 &&
+                sat in 0.25f..0.75f && mx in 40..250
+            if (skin) n++
+            skin
+        }
+        val frac = n.toFloat() / total
+        if (frac < 0.004f || frac > 0.35f) return null
+        return dilate(m, w, h, 2)
+    }
+
+    private fun withoutSkin(m: BooleanArray?, skin: BooleanArray?): BooleanArray? {
+        if (m == null) return null
+        if (skin == null) return m
+        return BooleanArray(m.size) { m[it] && !skin[it] }
+    }
+
+    // ---------- ink density (text printed on the page) ----------
+
+    private fun inkMask(g: FloatArray, w: Int, h: Int, skin: BooleanArray?): BooleanArray? {
+        val total = w * h
+        val local = boxBlurF(g, w, h, 8)
+        var n = 0
+        val ink = FloatArray(total) {
+            val dark = local[it] - g[it] > 14f && g[it] > 25f && (skin == null || !skin[it])
+            if (dark) { n++; 1f } else 0f
+        }
+        if (n < total * 0.004f) return null
+        val dens = boxBlurF(ink, w, h, 6)
+        val m = BooleanArray(total) { dens[it] > 0.03f }
+        val closed = dilate(m, w, h, 8)
+        val frac = closed.count { it }.toFloat() / total
+        return if (frac in 0.08f..0.90f) closed else null
+    }
+
+    // ---------- edge snapping ----------
+
+    /**
+     * Slides each side of the quad up to +-8 px along its normal onto the strongest gradient ridge
+     * and re-intersects neighbouring sides. Falls back to the input if the result is not sane.
+     */
+    private fun refineQuad(q: List<Pt>, mag: FloatArray, w: Int, h: Int): List<Pt> {
+        val ox = FloatArray(4)
+        val oy = FloatArray(4)
+        val dxs = FloatArray(4)
+        val dys = FloatArray(4)
+        for (i in 0 until 4) {
+            val a = q[i]
+            val b = q[(i + 1) % 4]
+            val dx = b.x - a.x
+            val dy = b.y - a.y
+            val len = max(1e-3f, hypot(dx, dy))
+            val nx = -dy / len
+            val ny = dx / len
+            var bestOff = 0
+            var bestVal = -Float.MAX_VALUE
+            for (off in -8..8) {
+                var sum = 0f
+                var cnt = 0
+                for (k in 1..30) {
+                    val t = k / 31f
+                    val x = (a.x + dx * t + nx * off).roundToInt()
+                    val y = (a.y + dy * t + ny * off).roundToInt()
+                    if (x in 0 until w && y in 0 until h) { sum += mag[y * w + x]; cnt++ }
+                }
+                if (cnt < 10) continue
+                val v = sum / cnt - 2f * abs(off)
+                if (v > bestVal) { bestVal = v; bestOff = off }
+            }
+            ox[i] = a.x + nx * bestOff
+            oy[i] = a.y + ny * bestOff
+            dxs[i] = dx
+            dys[i] = dy
+        }
+        val out = ArrayList<Pt>(4)
+        for (i in 0 until 4) {
+            val j = (i + 3) % 4 // side ending at corner i
+            val cr = dxs[j] * dys[i] - dys[j] * dxs[i]
+            if (abs(cr) < 1e-3f) return q
+            val t = ((ox[i] - ox[j]) * dys[i] - (oy[i] - oy[j]) * dxs[i]) / cr
+            val p = Pt(ox[j] + dxs[j] * t, oy[j] + dys[j] * t)
+            if (hypot(p.x - q[i].x, p.y - q[i].y) > 14f) return q
+            out.add(p)
+        }
+        return if (anglesOk(out)) out else q
     }
 
     // ---------- image operators ----------
@@ -173,7 +298,7 @@ object DocDetect {
     // ---------- NEW: border-colour distance channel ----------
 
     /** The page usually differs from the table/cloth colour that frames the image. */
-    private fun borderDistMask(px: IntArray, w: Int, h: Int): BooleanArray? {
+    private fun borderDistMask(px: IntArray, w: Int, h: Int, skin: BooleanArray?): BooleanArray? {
         val total = w * h
         val m = max(2, (min(w, h) * 0.04f).toInt())
         val rs = ArrayList<Int>(4096)
@@ -185,10 +310,12 @@ object DocDetect {
             var x = 0
             while (x < w) {
                 if (inBandY || x < m || x >= w - m) {
-                    val p = px[y * w + x]
-                    rs.add((p shr 16) and 255)
-                    gs.add((p shr 8) and 255)
-                    bs.add(p and 255)
+                    if (skin == null || !skin[y * w + x]) {
+                        val p = px[y * w + x]
+                        rs.add((p shr 16) and 255)
+                        gs.add((p shr 8) and 255)
+                        bs.add(p and 255)
+                    }
                     x += 2
                 } else {
                     // jump straight to the right-hand band
@@ -615,11 +742,6 @@ object DocDetect {
         }
         score *= 0.85f.pow(onFrame)
 
-        val out = FloatArray(8)
-        for (i in 0 until 4) {
-            out[2 * i] = ((ex[i].x + 0.5f) / w).coerceIn(0f, 1f)
-            out[2 * i + 1] = ((ex[i].y + 0.5f) / h).coerceIn(0f, 1f)
-        }
-        return Cand(out, score)
+        return Cand(toNorm(ex, w, h), score, ex)
     }
 }

@@ -94,4 +94,5 @@
     <string name="filter_enhance">மேம்படுத்து</string>
     <string name="filter_noshadow">நிழல் இல்லை</string>
     <string name="viewer_error">இந்த PDF-ஐ திறக்க முடியவில்லை</string>
+    <string name="auto_failed_hint">பக்க விளிம்புகளை தானாகக் கண்டறிய முடியவில்லை. மூலைகளை இழுத்து பக்கத்துடன் பொருத்தவும்.</string>
 </resources>

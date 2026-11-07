@@ -87,6 +87,9 @@ object Imaging {
 
     fun detectCorners(path: String): FloatArray = DocDetect.detect(path)
 
+    /** null when no page could be found with confidence (UI then shows a hint). */
+    fun detectCornersOrNull(path: String): FloatArray? = DocDetect.detectOrNull(path)
+
     private fun cross3(a: DoubleArray, b: DoubleArray) = doubleArrayOf(
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],
@@ -499,9 +502,6 @@ object Imaging {
                     var normR = r.toFloat()
                     var normG = g.toFloat()
                     var normB = b.toFloat()
-                    var bgLR = 255f
-                    var bgLG = 255f
-                    var bgLB = 255f
 
                     if (useBg && bg != null) {
                         val xi = x0[x]
@@ -519,7 +519,6 @@ object Imaging {
                         val botB = bg.b[rowB + xi] * (1 - fxx) + bg.b[rowB + xi + 1] * fxx
                         val bValB = (topB * (1 - fy) + botB * fy).coerceAtLeast(30f)
 
-                        bgLR = bValR; bgLG = bValG; bgLB = bValB
                         normR = min(255f, (r / bValR) * 255f)
                         normG = min(255f, (g / bValG) * 255f)
                         normB = min(255f, (b / bValB) * 255f)
@@ -565,25 +564,31 @@ object Imaging {
                             } else {
                                 normL
                             }
-                            // local paper level from the background map -> true adaptive binarisation
-                            val bgL = 0.299f * bgLR + 0.587f * bgLG + 0.114f * bgLB
-                            val tLoc = (bgL * 0.58f).coerceIn(90f, 220f)
-                            val tt = ((inkVal - (tLoc - 32f)) / 64f).coerceIn(0f, 1f)
+                            // normL/inkVal are already divided by the local paper level (paper ~ 255),
+                            // so the threshold must live in that same normalised domain.
+                            // 195 +- 32: <=163 -> black, >=227 -> white (keeps faint dot-matrix ink)
+                            val tt = ((inkVal - 163f) / 64f).coerceIn(0f, 1f)
                             val v = (255f * tt * tt * (3f - 2f * tt)).toInt()
                             rr = v; gg = v; bb = v
                         }
                         FilterMode.MAGIC -> {
-                            // 1) push paper toward pure white (smoothstep on brightness)
-                            val t = ((normL - 165f) / 70f).coerceIn(0f, 1f)
-                            val tw = t * t * (3f - 2f * t)
-                            var fR = normR + (255f - normR) * 0.92f * tw
-                            var fG = normG + (255f - normG) * 0.92f * tw
-                            var fB = normB + (255f - normB) * 0.92f * tw
-                            // 2) push text/ink toward black (gamma > 1 on the dark end)
-                            val fl = fR * 0.299f + fG * 0.587f + fB * 0.114f
-                            if (fl < 175f) {
-                                val gain = (fl / 255f).pow(1.7f) * 255f / max(fl, 1f)
-                                fR *= gain; fG *= gain; fB *= gain
+                            // normalised paper ~255, faint ink ~140..200.
+                            // 1) tone curve: everything >= KNEE becomes paper-white, below it a steep
+                            //    gamma pulls ink toward black (colour is kept by scaling all channels).
+                            val knee = 228f
+                            val gl = if (normL >= knee) 255f
+                            else 255f * (normL / knee).pow(2.6f)
+                            val gain = gl / max(normL, 1f)
+                            var fR = normR * gain
+                            var fG = normG * gain
+                            var fB = normB * gain
+                            // 2) near-paper pixels: remove the remaining tint
+                            if (normL > 205f) {
+                                val t = ((normL - 205f) / 30f).coerceIn(0f, 1f)
+                                val tw = t * t * (3f - 2f * t)
+                                fR += (255f - fR) * 0.92f * tw
+                                fG += (255f - fG) * 0.92f * tw
+                                fB += (255f - fB) * 0.92f * tw
                             }
                             rr = fR.toInt().coerceIn(0, 255)
                             gg = fG.toInt().coerceIn(0, 255)

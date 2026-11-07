@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -50,6 +51,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
+private val INSET = floatArrayOf(0.08f, 0.08f, 0.92f, 0.08f, 0.92f, 0.92f, 0.08f, 0.92f)
 private val FULL = floatArrayOf(0.03f, 0.03f, 0.97f, 0.03f, 0.97f, 0.97f, 0.03f, 0.97f)
 
 @Composable
@@ -66,6 +68,7 @@ fun CropScreen(vm: AppViewModel) {
         mutableStateListOf(Offset(0.05f, 0.05f), Offset(0.95f, 0.05f), Offset(0.95f, 0.95f), Offset(0.05f, 0.95f))
     }
     var ready by remember(path) { mutableStateOf(false) }
+    var autoFailed by remember(path) { mutableStateOf(false) }
     val editCorners = vm.cropEditIndex?.let { vm.pages.getOrNull(it)?.corners }
 
     fun setCorners(a: FloatArray) {
@@ -94,7 +97,11 @@ fun CropScreen(vm: AppViewModel) {
         ready = false
         val init: FloatArray = when {
             editCorners != null -> editCorners.toFloatArray()
-            vm.autoDetect -> withContext(Dispatchers.Default) { Imaging.detectCorners(path) }
+            vm.autoDetect -> {
+                val d = withContext(Dispatchers.Default) { Imaging.detectCornersOrNull(path) }
+                autoFailed = d == null
+                d ?: INSET
+            }
             else -> FULL
         }
         setCorners(init)
@@ -191,14 +198,23 @@ fun CropScreen(vm: AppViewModel) {
             }
         }
 
+        if (autoFailed && ready) {
+            Text(
+                stringResource(R.string.auto_failed_hint),
+                color = c.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp)
+            )
+        }
+
         Row(
             Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             SecondaryButton(stringResource(R.string.auto), Modifier.weight(1f), enabled = ready) {
                 scope.launch {
-                    val a = withContext(Dispatchers.Default) { Imaging.detectCorners(path) }
-                    setCorners(a)
+                    val a = withContext(Dispatchers.Default) { Imaging.detectCornersOrNull(path) }
+                    autoFailed = a == null
+                    setCorners(a ?: INSET)
                 }
             }
             SecondaryButton(stringResource(R.string.full_page), Modifier.weight(1f), enabled = ready) { setCorners(FULL) }

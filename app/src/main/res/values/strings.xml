@@ -95,4 +95,5 @@
     <string name="filter_enhance">Enhance</string>
     <string name="filter_noshadow">No shadow</string>
     <string name="viewer_error">Could not open this PDF</string>
+    <string name="auto_failed_hint">Couldn\'t find the page edges automatically. Drag the corners to fit the page.</string>
 </resources>
