@@ -28,9 +28,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
@@ -46,6 +48,7 @@ import com.campdf.app.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 
 private val FULL = floatArrayOf(0.03f, 0.03f, 0.97f, 0.03f, 0.97f, 0.97f, 0.03f, 0.97f)
 
@@ -57,7 +60,7 @@ fun CropScreen(vm: AppViewModel) {
     val scope = rememberCoroutineScope()
 
     val img by produceState<ImageBitmap?>(initialValue = null, path) {
-        value = withContext(Dispatchers.Default) { Imaging.loadOriented(path, 1600)?.asImageBitmap() }
+        value = withContext(Dispatchers.Default) { Imaging.loadOriented(path, 1800)?.asImageBitmap() }
     }
     val pts = remember(path) {
         mutableStateListOf(Offset(0.05f, 0.05f), Offset(0.95f, 0.05f), Offset(0.95f, 0.95f), Offset(0.05f, 0.95f))
@@ -66,10 +69,29 @@ fun CropScreen(vm: AppViewModel) {
     val editCorners = vm.cropEditIndex?.let { vm.pages.getOrNull(it)?.corners }
 
     fun setCorners(a: FloatArray) {
-        for (i in 0 until 4) pts[i] = Offset(a[2 * i], a[2 * i + 1])
+        if (a.size < 8) return
+        for (i in 0 until 4) pts[i] = Offset(a[2 * i].coerceIn(0f, 1f), a[2 * i + 1].coerceIn(0f, 1f))
+    }
+
+    fun validQuad(candidate: List<Offset>): Boolean {
+        var sign = 0
+        var area2 = 0f
+        for (i in 0 until 4) {
+            val a = candidate[i]
+            val b = candidate[(i + 1) % 4]
+            val d = candidate[(i + 2) % 4]
+            val cross = (b.x - a.x) * (d.y - b.y) - (b.y - a.y) * (d.x - b.x)
+            if (abs(cross) < 0.0005f) return false
+            val nextSign = if (cross > 0) 1 else -1
+            if (sign != 0 && sign != nextSign) return false
+            sign = nextSign
+            area2 += a.x * b.y - b.x * a.y
+        }
+        return abs(area2) * 0.5f >= 0.025f
     }
 
     LaunchedEffect(path) {
+        ready = false
         val init: FloatArray = when {
             editCorners != null -> editCorners.toFloatArray()
             vm.autoDetect -> withContext(Dispatchers.Default) { Imaging.detectCorners(path) }
@@ -92,7 +114,7 @@ fun CropScreen(vm: AppViewModel) {
             } else {
                 var boxSize by remember(path) { mutableStateOf(IntSize.Zero) }
                 var active by remember(path) { mutableIntStateOf(-1) }
-                val hitPx = with(density) { 48.dp.toPx() }
+                val hitPx = with(density) { 56.dp.toPx() }
                 val primary = c.primary
                 Box(
                     Modifier
@@ -115,11 +137,16 @@ fun CropScreen(vm: AppViewModel) {
                                 onDrag = { change, drag ->
                                     if (active >= 0 && boxSize.width > 0 && boxSize.height > 0) {
                                         change.consume()
-                                        val p = pts[active]
-                                        pts[active] = Offset(
-                                            (p.x + drag.x / boxSize.width).coerceIn(0f, 1f),
-                                            (p.y + drag.y / boxSize.height).coerceIn(0f, 1f)
-                                        )
+                                        val current = pts.toList()
+                                        val p = current[active]
+                                        val proposed = current.toMutableList().apply {
+                                            this[active] = Offset(
+                                                (p.x + drag.x / boxSize.width).coerceIn(0f, 1f),
+                                                (p.y + drag.y / boxSize.height).coerceIn(0f, 1f)
+                                            )
+                                        }
+                                        // Do not let handles cross or create a degenerate crop.
+                                        if (validQuad(proposed)) pts[active] = proposed[active]
                                     }
                                 }
                             )
@@ -135,12 +162,29 @@ fun CropScreen(vm: AppViewModel) {
                             lineTo(p[3].x, p[3].y)
                             close()
                         }
-                        drawPath(quad, primary.copy(alpha = 0.16f))
-                        drawPath(quad, primary, style = Stroke(width = 2.dp.toPx()))
+                        val shade = Path().apply {
+                            fillType = PathFillType.EvenOdd
+                            addRect(Rect(0f, 0f, size.width, size.height))
+                            addPath(quad)
+                        }
+                        drawPath(shade, Color.Black.copy(alpha = 0.48f))
+                        // Rule-of-thirds guides make alignment and page margins easier to judge.
+                        for (t in 1..2) {
+                            val f = t / 3f
+                            val left = Offset(p[0].x + (p[3].x - p[0].x) * f, p[0].y + (p[3].y - p[0].y) * f)
+                            val right = Offset(p[1].x + (p[2].x - p[1].x) * f, p[1].y + (p[2].y - p[1].y) * f)
+                            val top = Offset(p[0].x + (p[1].x - p[0].x) * f, p[0].y + (p[1].y - p[0].y) * f)
+                            val bottom = Offset(p[3].x + (p[2].x - p[3].x) * f, p[3].y + (p[2].y - p[3].y) * f)
+                            drawLine(Color.White.copy(alpha = 0.55f), left, right, 1.dp.toPx())
+                            drawLine(Color.White.copy(alpha = 0.55f), top, bottom, 1.dp.toPx())
+                        }
+                        drawPath(quad, Color.Black.copy(alpha = 0.55f), style = Stroke(width = 5.dp.toPx()))
+                        drawPath(quad, primary, style = Stroke(width = 2.5.dp.toPx()))
                         p.forEach {
-                            drawCircle(Color.White, 14.dp.toPx(), it)
+                            drawCircle(Color.Black.copy(alpha = 0.45f), 19.dp.toPx(), it)
+                            drawCircle(Color.White, 15.dp.toPx(), it)
                             drawCircle(primary, 11.dp.toPx(), it)
-                            drawCircle(Color.White, 3.5.dp.toPx(), it)
+                            drawCircle(Color.White, 3.dp.toPx(), it)
                         }
                     }
                 }
@@ -151,11 +195,7 @@ fun CropScreen(vm: AppViewModel) {
             Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            SecondaryButton(
-                stringResource(R.string.auto),
-                Modifier.weight(1f),
-                enabled = ready
-            ) {
+            SecondaryButton(stringResource(R.string.auto), Modifier.weight(1f), enabled = ready) {
                 scope.launch {
                     val a = withContext(Dispatchers.Default) { Imaging.detectCorners(path) }
                     setCorners(a)

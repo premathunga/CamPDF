@@ -2,7 +2,7 @@ package com.campdf.app
 
 import java.io.File
 
-enum class FilterMode { ORIGINAL, LIGHTEN, ENHANCE, NO_SHADOW, BW }
+enum class FilterMode { ORIGINAL, LIGHTEN, ENHANCE, NO_SHADOW, BW, MAGIC }
 
 enum class Screen { Welcome, Home, Viewer, Camera, Crop, Review, SignPad, SignPlace, Export, Settings }
 
@@ -18,7 +18,7 @@ data class PageItem(
     val basePath: String,
     val corners: List<Float>?,
     val rotation: Int = 0,
-    val filter: FilterMode = FilterMode.NO_SHADOW,
+    val filter: FilterMode = FilterMode.MAGIC,
     val rev: Int = 0
 )
 

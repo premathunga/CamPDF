@@ -366,10 +366,16 @@ object Imaging {
         var bgG = FloatArray(sw * sh) { ((px[it] shr 8) and 255).toFloat() }
         var bgB = FloatArray(sw * sh) { (px[it] and 255).toFloat() }
 
-        // Morphological dilation removes dark text and handwriting lines, leaving paper tone
+        // Morphological closing + box blur works better than a single coarse blur; it preserves
+        // the paper tone while suppressing dark text and folds.
         bgR = boxBlurSeparable(dilateF(bgR, sw, sh, 4), sw, sh, 3)
         bgG = boxBlurSeparable(dilateF(bgG, sw, sh, 4), sw, sh, 3)
         bgB = boxBlurSeparable(dilateF(bgB, sw, sh, 4), sw, sh, 3)
+
+        // A second light pass keeps the paper white without making the whole scan too flat.
+        bgR = boxBlurSeparable(bgR, sw, sh, 2)
+        bgG = boxBlurSeparable(bgG, sw, sh, 2)
+        bgB = boxBlurSeparable(bgB, sw, sh, 2)
 
         return BgMap(bgR, bgG, bgB, sw, sh)
     }
@@ -417,12 +423,13 @@ object Imaging {
     /**
      * ENHANCE   : auto-levels (contrast stretch) + light sharpening, keeps colour
      * NO_SHADOW : shadow removal by dividing by the estimated paper brightness, whitens the page, keeps colour
+     * MAGIC     : shadow removal + paper -> white, ink -> black (CamScanner "Magic Color")
      * BW        : shadow removal + sharpening + adaptive black/white (crisp text for printing / filing)
      */
     private fun process(src: Bitmap, mode: FilterMode): Bitmap {
         val w = src.width
         val h = src.height
-        val useBg = mode == FilterMode.NO_SHADOW || mode == FilterMode.BW
+        val useBg = mode == FilterMode.NO_SHADOW || mode == FilterMode.BW || mode == FilterMode.MAGIC
         var bg: BgMap? = null
         if (useBg) {
             bg = backgroundMap(src)
@@ -431,13 +438,13 @@ object Imaging {
         var hi = 255f
         var bwThreshold = 157.5f
         if (mode == FilterMode.ENHANCE || mode == FilterMode.BW) {
-            // Robust percentile levels make both contrast enhancement and BW conversion adapt
-            // to dim captures, aged paper and documents with different ink/paper densities.
             val p = levels(src)
             lo = p.first
             hi = p.second
             if (mode == FilterMode.BW) {
-                bwThreshold = (lo + (hi - lo) * 0.58f).coerceIn(95f, 220f)
+                // binarisation is done per pixel from the local paper level (see BW branch);
+                // the post-sharpen pass only re-smooths around mid-grey
+                bwThreshold = 128f
             }
         }
         val levelScale = 255f / (hi - lo).coerceAtLeast(40f)
@@ -454,6 +461,7 @@ object Imaging {
         }
         val sharp = when (mode) {
             FilterMode.BW -> 0.9f
+            FilterMode.MAGIC -> 0.7f
             FilterMode.ENHANCE -> 0.6f
             else -> 0.5f
         }
@@ -466,7 +474,6 @@ object Imaging {
         var y = 0
         while (y < h) {
             val n = min(rows, h - y)
-            // rows y-1 .. y+n (one extra row above and below for the sharpening kernel)
             for (j in 0 until n + 2) {
                 val ry = (y - 1 + j).coerceIn(0, h - 1)
                 src.getPixels(inBuf, j * w, w, 0, ry, w, 1)
@@ -492,6 +499,9 @@ object Imaging {
                     var normR = r.toFloat()
                     var normG = g.toFloat()
                     var normB = b.toFloat()
+                    var bgLR = 255f
+                    var bgLG = 255f
+                    var bgLB = 255f
 
                     if (useBg && bg != null) {
                         val xi = x0[x]
@@ -509,7 +519,7 @@ object Imaging {
                         val botB = bg.b[rowB + xi] * (1 - fxx) + bg.b[rowB + xi + 1] * fxx
                         val bValB = (topB * (1 - fy) + botB * fy).coerceAtLeast(30f)
 
-                        // Channel-wise Retinex division: cleans all color casts and uneven illumination
+                        bgLR = bValR; bgLG = bValG; bgLB = bValB
                         normR = min(255f, (r / bValR) * 255f)
                         normG = min(255f, (g / bValG) * 255f)
                         normB = min(255f, (b / bValB) * 255f)
@@ -539,6 +549,11 @@ object Imaging {
                                 finalB *= gain
                             }
 
+                            val softGamma = if (normL < 160f) 1.2f else 1.05f
+                            finalR = ((finalR / 255f).pow(softGamma) * 255f).coerceIn(0f, 255f)
+                            finalG = ((finalG / 255f).pow(softGamma) * 255f).coerceIn(0f, 255f)
+                            finalB = ((finalB / 255f).pow(softGamma) * 255f).coerceIn(0f, 255f)
+
                             rr = finalR.toInt().coerceIn(0, 255)
                             gg = finalG.toInt().coerceIn(0, 255)
                             bb = finalB.toInt().coerceIn(0, 255)
@@ -550,24 +565,51 @@ object Imaging {
                             } else {
                                 normL
                             }
-                            val gv = inkVal.toInt().coerceIn(0, 255)
-                            rr = gv; gg = gv; bb = gv
+                            // local paper level from the background map -> true adaptive binarisation
+                            val bgL = 0.299f * bgLR + 0.587f * bgLG + 0.114f * bgLB
+                            val tLoc = (bgL * 0.58f).coerceIn(90f, 220f)
+                            val tt = ((inkVal - (tLoc - 32f)) / 64f).coerceIn(0f, 1f)
+                            val v = (255f * tt * tt * (3f - 2f * tt)).toInt()
+                            rr = v; gg = v; bb = v
+                        }
+                        FilterMode.MAGIC -> {
+                            // 1) push paper toward pure white (smoothstep on brightness)
+                            val t = ((normL - 165f) / 70f).coerceIn(0f, 1f)
+                            val tw = t * t * (3f - 2f * t)
+                            var fR = normR + (255f - normR) * 0.92f * tw
+                            var fG = normG + (255f - normG) * 0.92f * tw
+                            var fB = normB + (255f - normB) * 0.92f * tw
+                            // 2) push text/ink toward black (gamma > 1 on the dark end)
+                            val fl = fR * 0.299f + fG * 0.587f + fB * 0.114f
+                            if (fl < 175f) {
+                                val gain = (fl / 255f).pow(1.7f) * 255f / max(fl, 1f)
+                                fR *= gain; fG *= gain; fB *= gain
+                            }
+                            rr = fR.toInt().coerceIn(0, 255)
+                            gg = fG.toInt().coerceIn(0, 255)
+                            bb = fB.toInt().coerceIn(0, 255)
                         }
                         FilterMode.ENHANCE -> {
                             val re = ((r - lo) * levelScale).coerceIn(0f, 255f)
                             val ge = ((g - lo) * levelScale).coerceIn(0f, 255f)
                             val be = ((b - lo) * levelScale).coerceIn(0f, 255f)
                             val le = re * 0.299f + ge * 0.587f + be * 0.114f
+
+                            val boost = if (le < 130f) 1.28f else if (le > 210f) 0.96f else 1.08f
+                            val rrF = ((re / 255f).pow(boost) * 255f).coerceIn(0f, 255f)
+                            val ggF = ((ge / 255f).pow(boost) * 255f).coerceIn(0f, 255f)
+                            val bbF = ((be / 255f).pow(boost) * 255f).coerceIn(0f, 255f)
+
                             if (le < 200f) {
                                 val darkL = CONTRAST_LUT[le.toInt().coerceIn(0, 255)]
                                 val gain = darkL / max(le, 1f)
-                                rr = (re * gain).toInt().coerceIn(0, 255)
-                                gg = (ge * gain).toInt().coerceIn(0, 255)
-                                bb = (be * gain).toInt().coerceIn(0, 255)
+                                rr = (rrF * gain).toInt().coerceIn(0, 255)
+                                gg = (ggF * gain).toInt().coerceIn(0, 255)
+                                bb = (bbF * gain).toInt().coerceIn(0, 255)
                             } else {
-                                rr = re.toInt().coerceIn(0, 255)
-                                gg = ge.toInt().coerceIn(0, 255)
-                                bb = be.toInt().coerceIn(0, 255)
+                                rr = rrF.toInt().coerceIn(0, 255)
+                                gg = ggF.toInt().coerceIn(0, 255)
+                                bb = bbF.toInt().coerceIn(0, 255)
                             }
                         }
                         else -> { rr = r; gg = g; bb = b }
@@ -585,8 +627,6 @@ object Imaging {
                     val r2 = sharpenCh(c, up, dn, lf, rt, 16, sharp)
                     val o = (j - 1) * w + x
                     if (mode == FilterMode.BW) {
-                        // Soft transition around an image-adaptive threshold preserves thin
-                        // handwriting better than a fixed global cutoff.
                         val t = ((r2 - (bwThreshold - 36f)) / 72f).coerceIn(0f, 1f)
                         val v = (255f * t * t * (3f - 2f * t)).toInt()
                         outBuf[o] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v
