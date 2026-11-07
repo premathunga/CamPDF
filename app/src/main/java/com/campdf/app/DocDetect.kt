@@ -57,8 +57,11 @@ object DocDetect {
         tryMask(chromaMask(px, g, w, h), 0f)
         tryMask(edgeMask(mag, w, h), 2.5f)
 
+        // A real document is usually centered and large, while random bright regions or shadows can
+        // form a valid hull but fail the centrality test. Keep a slightly more permissive threshold so
+        // legitimate pages with a low-contrast background still make it through.
         val best = cands.maxByOrNull { it.score } ?: return fallback
-        return if (best.score >= 0.20f) best.pts else fallback
+        return if (best.score >= 0.18f) best.pts else fallback
     }
 
     // ---------- image operators ----------
@@ -260,6 +263,49 @@ object DocDetect {
         val frac = count.toFloat() / total
         return if (frac in 0.08f..0.97f) mask else null
     }
+
+    private fun brightMask(g: FloatArray, w: Int, h: Int): BooleanArray? {
+        val total = w * h
+        val hist = IntArray(256)
+        val x0 = (w * 0.15f).toInt().coerceAtLeast(0)
+        val x1 = (w * 0.85f).toInt().coerceAtMost(w - 1)
+        val y0 = (h * 0.15f).toInt().coerceAtLeast(0)
+        val y1 = (h * 0.85f).toInt().coerceAtMost(h - 1)
+        var centralCount = 0
+        for (y in y0..y1) {
+            val row = y * w
+            for (x in x0..x1) {
+                val v = g[row + x].toInt().coerceIn(0, 255)
+                hist[v]++
+                centralCount++
+            }
+        }
+        if (centralCount == 0) return null
+
+        var sum = 0L
+        for (i in 0..255) sum += i.toLong() * hist[i]
+        var sumB = 0L
+        var wB = 0
+        var best = -1.0
+        var thr = 128
+        for (t in 0..255) {
+            wB += hist[t]
+            if (wB == 0) continue
+            val wF = centralCount - wB
+            if (wF == 0) break
+            sumB += t.toLong() * hist[t]
+            val mB = sumB.toDouble() / wB
+            val mF = (sum - sumB).toDouble() / wF
+            val v = wB.toDouble() * wF * (mB - mF) * (mB - mF)
+            if (v > best) { best = v; thr = t }
+        }
+
+        // A paper region often sits near the center of the frame; apply the threshold to the full image
+        // but keep the threshold from drifting to a fully black or fully white background.
+        val robustThr = thr.coerceIn(86, 198)
+        return BooleanArray(total) { g[it] > robustThr }
+    }
+
 
     private fun edgeMask(mag: FloatArray, w: Int, h: Int): BooleanArray? {
         val total = w * h
@@ -516,7 +562,7 @@ object DocDetect {
         val areaFrac = comp.size.toFloat() / total
         if (areaFrac < 0.08f || areaFrac > 0.985f) return null
 
-        // boundary points via erosion ring (R5 fix: robust against row-spanning slivers)
+        // Boundary points via erosion ring (R5 fix: robust against row-spanning slivers).
         val compMask = BooleanArray(total)
         for (i in comp) compMask[i] = true
         val er = BooleanArray(total)
@@ -534,6 +580,13 @@ object DocDetect {
             cxAcc += (i % w)
             cyAcc += (i / w)
             if (er[i]) pts.add(Pt((i % w).toFloat(), (i / w).toFloat()))
+        }
+        val centroidX = cxAcc / comp.size
+        val centroidY = cyAcc / comp.size
+        val centerBias = 1f - min(
+            1f,
+            (abs(centroidX - w / 2f) / (w * 0.35f)) + (abs(centroidY - h / 2f) / (h * 0.35f))
+        )
         }
         if (pts.size < 8) return null
 
@@ -605,7 +658,7 @@ object DocDetect {
             else -> 0.1f
         }
 
-        // fill and size dominate; edge strength is a tie-breaker, not a gate (R4 fix)
+        // Fill and size dominate; edge strength is a tie-breaker, not a gate (R4 fix).
         var score = 0.30f * fill + 0.24f * min(1f, areaFrac / 0.55f) +
             0.15f * es + 0.13f * centerBias + 0.12f * aspectPrior + 0.06f * shapeScore
 
