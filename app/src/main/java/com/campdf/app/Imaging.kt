@@ -768,44 +768,31 @@ object Imaging {
                     var bb: Int
                     when (mode) {
                         FilterMode.NO_SHADOW -> {
-                            val maxC = max(normR, max(normG, normB))
-                            val minC = min(normR, min(normG, normB))
-                            val chroma = maxC - minC
-                            val sat = if (maxC > 10f) chroma / maxC else 0f
-                            val isBlueInk = (normB - normR > 4f) && (normB - normG > 2f)
-                            val isRedInk = (normR - normG > 12f) && (normR - normB > 12f)
-                            val isColorInk = (sat > 0.08f && chroma > 8f && normL < 225f) || isBlueInk || isRedInk
-
-                            val stroke = ((232f - normL) / 232f).coerceIn(0f, 1f)
-                            if (stroke < 0.05f && !isColorInk) {
-                                rr = 255; gg = 255; bb = 255
-                            } else {
-                                var whiteGain = 0f
-                                if (normL >= 215f && stroke < 0.10f) {
-                                    val t = ((normL - 215f) / 40f).coerceIn(0f, 1f)
-                                    whiteGain = t * t * (3f - 2f * t)
-                                }
-                                var finalR = normR + (255f - normR) * whiteGain
-                                var finalG = normG + (255f - normG) * whiteGain
-                                var finalB = normB + (255f - normB) * whiteGain
-
-                                if (normL < 210f) {
-                                    val darkL = CONTRAST_LUT[normL.toInt().coerceIn(0, 255)]
-                                    val gain = darkL / max(normL, 1f)
-                                    finalR *= gain
-                                    finalG *= gain
-                                    finalB *= gain
-                                }
-
-                                val softGamma = if (normL < 160f) 1.15f else 1.03f
-                                finalR = ((finalR / 255f).pow(softGamma) * 255f).coerceIn(0f, 255f)
-                                finalG = ((finalG / 255f).pow(softGamma) * 255f).coerceIn(0f, 255f)
-                                finalB = ((finalB / 255f).pow(softGamma) * 255f).coerceIn(0f, 255f)
-
-                                rr = finalR.toInt().coerceIn(0, 255)
-                                gg = finalG.toInt().coerceIn(0, 255)
-                                bb = finalB.toInt().coerceIn(0, 255)
+                            var whiteGain = 0f
+                            if (normL >= 195f) {
+                                val t = ((normL - 195f) / 50f).coerceIn(0f, 1f)
+                                whiteGain = t * t * (3f - 2f * t)
                             }
+                            var finalR = normR + (255f - normR) * whiteGain
+                            var finalG = normG + (255f - normG) * whiteGain
+                            var finalB = normB + (255f - normB) * whiteGain
+
+                            if (normL < 200f) {
+                                val darkL = CONTRAST_LUT[normL.toInt().coerceIn(0, 255)]
+                                val gain = darkL / max(normL, 1f)
+                                finalR *= gain
+                                finalG *= gain
+                                finalB *= gain
+                            }
+
+                            val softGamma = if (normL < 160f) 1.18f else 1.04f
+                            finalR = ((finalR / 255f).pow(softGamma) * 255f).coerceIn(0f, 255f)
+                            finalG = ((finalG / 255f).pow(softGamma) * 255f).coerceIn(0f, 255f)
+                            finalB = ((finalB / 255f).pow(softGamma) * 255f).coerceIn(0f, 255f)
+
+                            rr = finalR.toInt().coerceIn(0, 255)
+                            gg = finalG.toInt().coerceIn(0, 255)
+                            bb = finalB.toInt().coerceIn(0, 255)
                         }
                         FilterMode.BW -> {
                             // Detect blue ink as well as red ink and stamps so they don't fade or vanish into white paper
@@ -847,33 +834,26 @@ object Imaging {
                                 rr = (satR * inkGain).toInt().coerceIn(0, 255)
                                 gg = (satG * inkGain).toInt().coerceIn(0, 255)
                                 bb = (satB * inkGain).toInt().coerceIn(0, 255)
+                            } else if (normL > 190f) {
+                                // 📄 Paper background: smooth into 100% pure spotless white (255, 255, 255)
+                                val t = ((normL - 190f) / 45f).coerceIn(0f, 1f)
+                                val tw = t * t * (3f - 2f * t)
+                                val fR = normR + (255f - normR) * tw
+                                val fG = normG + (255f - normG) * tw
+                                val fB = normB + (255f - normB) * tw
+                                rr = fR.toInt().coerceIn(0, 255)
+                                gg = fG.toInt().coerceIn(0, 255)
+                                bb = fB.toInt().coerceIn(0, 255)
                             } else {
-                                // 📄 & 🔤 Neutral path: Stroke-aware Sigmoid contrast enhancement
-                                // Measures stroke intensity relative to clean paper (~232f)
-                                val stroke = ((232f - normL) / 232f).coerceIn(0f, 1f)
-                                if (stroke < 0.05f) {
-                                    // True paper background -> 100% spotless white
-                                    rr = 255
-                                    gg = 255
-                                    bb = 255
-                                } else {
-                                    // Text strokes (subtitles, faint headings, table lines, body text)
-                                    // Deepen strokes so faint headings and thin box lines never bleach out!
-                                    val enhancedStroke = if (stroke < 0.28f) {
-                                        // Faint text / heading / grid lines: boost contrast!
-                                        val t = (stroke - 0.05f) / 0.23f
-                                        t * t * (3f - 2f * t) * 0.65f
-                                    } else {
-                                        // Body text / strong print: solid black
-                                        val t = ((stroke - 0.28f) / 0.72f).coerceIn(0f, 1f)
-                                        0.65f + t * 0.35f
-                                    }
-                                    val targetL = (255f * (1f - enhancedStroke)).coerceIn(0f, 255f)
-                                    val gain = targetL / max(normL, 1f)
-                                    rr = (normR * gain).toInt().coerceIn(0, 255)
-                                    gg = (normG * gain).toInt().coerceIn(0, 255)
-                                    bb = (normB * gain).toInt().coerceIn(0, 255)
-                                }
+                                // 🔤 Printed black text / Pencil: deepen into solid, sharp jet black
+                                val bp = 90f
+                                val wp = 190f
+                                val tl = ((normL - bp) / (wp - bp)).coerceIn(0f, 1f)
+                                val gl = 255f * tl.pow(1.35f)
+                                val gain = gl / max(normL, 1f)
+                                rr = (normR * gain).toInt().coerceIn(0, 255)
+                                gg = (normG * gain).toInt().coerceIn(0, 255)
+                                bb = (normB * gain).toInt().coerceIn(0, 255)
                             }
                         }
                         FilterMode.ENHANCE -> {
