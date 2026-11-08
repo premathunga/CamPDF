@@ -58,3 +58,18 @@ These are algorithmic improvements, not a claim of parity with CamScanner. Test 
   Limits: a finger covering text hides that text for real; very pale or very dark skin under strong colour casts may be
   missed; a skin-coloured table strip left along the page border would also be whitened (usually harmless).
 - Python references: `tools/prototype/v2_5/`. Not compiled here (no Android SDK in the sandbox).
+
+## v2.6.0 - CamScanner-inspired Color-Preserving Magic Engine & Professional Enhancements
+- **Color-Preserving Magic Color (`FilterMode.MAGIC`):**
+  - Pixels are classified into colored ink vs. neutral printed text vs. paper background.
+  - Handwritten blue pens, red pens, green/purple notes, and colored official rubber stamps are explicitly preserved and saturation-boosted (+30%), preventing ink from turning to pure black or fading out.
+  - Neutral printed text and pencil strokes are deepened into solid jet black using a high-contrast curve.
+  - Paper background and subtle shadows smoothly blend into 100% spotless white (255, 255, 255).
+- **Red ink & stamp protection in B&W mode (`FilterMode.BW`):**
+  - Added red-channel absorption check so red seals and red pen marks are rendered as solid crisp black rather than disappearing into the white background.
+- **Enhanced Edge Snapping (`DocDetect.kt`):**
+  - Extended boundary refinement search range from $\pm 8\text{ px}$ to $\pm 14\text{ px}$ with 40-step subpixel gradient sampling, locking tightly onto true document boundaries even over shadow gradients.
+- **Auto-Straightening / Orientation (`Imaging.kt` & `AppViewModel.kt`):**
+  - Added text line gradient variance detector (`detectSidewaysOrientation`) that automatically detects and straightens 90-degree sideways captures during crop confirmation.
+- **Print-Safe Margins (`PdfWriter.kt`):**
+  - Added standard 12 pt safe margins on standardized A4 exports, preventing physical printers from clipping document headers and footers.

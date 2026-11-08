@@ -83,6 +83,36 @@ object Imaging {
         return r
     }
 
+    /**
+     * Estimates whether the document image is sideways (rotated 90 or 270 degrees)
+     * based on text stroke directionality and gradient variance.
+     * Returns the recommended rotation in quarter turns (0 or 1).
+     */
+    fun detectSidewaysOrientation(bm: Bitmap): Int {
+        val sc = 320f / max(bm.width, bm.height)
+        val sw = (bm.width * sc).roundToInt().coerceAtLeast(32)
+        val sh = (bm.height * sc).roundToInt().coerceAtLeast(32)
+        val small = Bitmap.createScaledBitmap(bm, sw, sh, true)
+        val px = IntArray(sw * sh)
+        small.getPixels(px, 0, sw, 0, 0, sw, sh)
+        if (small !== bm) small.recycle()
+
+        var hGrad = 0L
+        var vGrad = 0L
+        for (y in 2 until sh - 2) {
+            val row = y * sw
+            for (x in 2 until sw - 2) {
+                val lumL = (px[row + x - 1] and 0xFF)
+                val lumR = (px[row + x + 1] and 0xFF)
+                val lumU = (px[row - sw + x] and 0xFF)
+                val lumD = (px[row + sw + x] and 0xFF)
+                hGrad += abs(lumR - lumL)
+                vGrad += abs(lumD - lumU)
+            }
+        }
+        return if (vGrad > hGrad * 1.38f) 1 else 0
+    }
+
     // ---------- detection / perspective ----------
 
     fun detectCorners(path: String): FloatArray = DocDetect.detect(path)
@@ -733,8 +763,8 @@ object Imaging {
                     when (mode) {
                         FilterMode.NO_SHADOW -> {
                             var whiteGain = 0f
-                            if (normL >= 205f) {
-                                val t = ((normL - 205f) / 45f).coerceIn(0f, 1f)
+                            if (normL >= 195f) {
+                                val t = ((normL - 195f) / 50f).coerceIn(0f, 1f)
                                 whiteGain = t * t * (3f - 2f * t)
                             }
                             var finalR = normR + (255f - normR) * whiteGain
@@ -749,7 +779,7 @@ object Imaging {
                                 finalB *= gain
                             }
 
-                            val softGamma = if (normL < 160f) 1.2f else 1.05f
+                            val softGamma = if (normL < 160f) 1.18f else 1.04f
                             finalR = ((finalR / 255f).pow(softGamma) * 255f).coerceIn(0f, 255f)
                             finalG = ((finalG / 255f).pow(softGamma) * 255f).coerceIn(0f, 255f)
                             finalB = ((finalB / 255f).pow(softGamma) * 255f).coerceIn(0f, 255f)
@@ -759,11 +789,13 @@ object Imaging {
                             bb = finalB.toInt().coerceIn(0, 255)
                         }
                         FilterMode.BW -> {
+                            // Detect blue ink as well as red ink and stamps so they don't fade or vanish into white paper
                             val isBlue = (normB - normR > 10f) && (normB - normG > 5f)
-                            val inkVal = if (isBlue) {
-                                min(normL, normR * 0.72f + normL * 0.28f)
-                            } else {
-                                normL
+                            val isRed = (normR - normG > 16f) && (normR - normB > 16f)
+                            val inkVal = when {
+                                isBlue -> min(normL, normR * 0.70f + normL * 0.30f)
+                                isRed -> min(normL, normG * 0.65f + normB * 0.35f)
+                                else -> normL
                             }
                             // normL/inkVal are already divided by the local paper level (paper ~ 255),
                             // so the threshold must live in that same normalised domain.
@@ -773,28 +805,51 @@ object Imaging {
                             rr = v; gg = v; bb = v
                         }
                         FilterMode.MAGIC -> {
-                            // normalised paper ~255, faint ink ~140..200.
-                            // 1) levels: <= BP -> pure black, >= WP -> paper-white, gamma 1.2 in between
-                            //    (colour is kept by scaling all three channels with the same gain).
-                            val bp = 135f
-                            val wp = 215f
-                            val tl = ((normL - bp) / (wp - bp)).coerceIn(0f, 1f)
-                            val gl = 255f * tl.pow(1.2f)
-                            val gain = gl / max(normL, 1f)
-                            var fR = normR * gain
-                            var fG = normG * gain
-                            var fB = normB * gain
-                            // 2) near-paper pixels: remove the remaining tint
-                            if (normL > 205f) {
-                                val t = ((normL - 205f) / 30f).coerceIn(0f, 1f)
+                            // CamScanner-inspired Color-Preserving Magic Engine:
+                            // 1) Chroma & Color ink detection (blue pen, red pen, colored stamp, highlighter)
+                            val maxC = max(normR, max(normG, normB))
+                            val minC = min(normR, min(normG, normB))
+                            val chroma = maxC - minC
+                            val sat = if (maxC > 15f) chroma / maxC else 0f
+                            val isBlueInk = (normB - normR > 12f) && (normB - normG > 6f)
+                            val isRedInk = (normR - normG > 18f) && (normR - normB > 18f)
+                            val isGreenInk = (normG - normR > 12f) && (normG - normB > 12f)
+                            val isColorInk = (sat > 0.16f && chroma > 16f && normL < 215f) || isBlueInk || isRedInk || isGreenInk
+
+                            if (isColorInk) {
+                                // ✍️ Colored ink / pen / stamps: PRESERVE HUE, boost saturation, enhance readability
+                                val mean = (normR + normG + normB) / 3f
+                                val satBoost = 1.30f // Boost color saturation so ballpoint pen looks vivid & crisp
+                                val satR = (mean + (normR - mean) * satBoost).coerceIn(0f, 255f)
+                                val satG = (mean + (normG - mean) * satBoost).coerceIn(0f, 255f)
+                                val satB = (mean + (normB - mean) * satBoost).coerceIn(0f, 255f)
+
+                                // Deepen ink slightly for sharp stroke contrast against white paper without turning black
+                                val inkGain = if (normL < 140f) 0.88f else 0.96f
+                                rr = (satR * inkGain).toInt().coerceIn(0, 255)
+                                gg = (satG * inkGain).toInt().coerceIn(0, 255)
+                                bb = (satB * inkGain).toInt().coerceIn(0, 255)
+                            } else if (normL > 195f) {
+                                // 📄 Paper background: smooth into 100% pure spotless white (255, 255, 255)
+                                val t = ((normL - 195f) / 45f).coerceIn(0f, 1f)
                                 val tw = t * t * (3f - 2f * t)
-                                fR += (255f - fR) * 0.92f * tw
-                                fG += (255f - fG) * 0.92f * tw
-                                fB += (255f - fB) * 0.92f * tw
+                                val fR = normR + (255f - normR) * tw
+                                val fG = normG + (255f - normG) * tw
+                                val fB = normB + (255f - normB) * tw
+                                rr = fR.toInt().coerceIn(0, 255)
+                                gg = fG.toInt().coerceIn(0, 255)
+                                bb = fB.toInt().coerceIn(0, 255)
+                            } else {
+                                // 🔤 Printed black text / Pencil: deepen into solid, sharp jet black
+                                val bp = 95f
+                                val wp = 195f
+                                val tl = ((normL - bp) / (wp - bp)).coerceIn(0f, 1f)
+                                val gl = 255f * tl.pow(1.35f)
+                                val gain = gl / max(normL, 1f)
+                                rr = (normR * gain).toInt().coerceIn(0, 255)
+                                gg = (normG * gain).toInt().coerceIn(0, 255)
+                                bb = (normB * gain).toInt().coerceIn(0, 255)
                             }
-                            rr = fR.toInt().coerceIn(0, 255)
-                            gg = fG.toInt().coerceIn(0, 255)
-                            bb = fB.toInt().coerceIn(0, 255)
                         }
                         FilterMode.ENHANCE -> {
                             // colour-preserving: all three channels get the same light correction

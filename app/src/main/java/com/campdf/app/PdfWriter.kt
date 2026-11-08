@@ -83,12 +83,17 @@ object PdfWriter {
 
                 // Fit the image inside the page without distortion (the A4 snap can differ from the
                 // scan's real proportions by a few percent -> letterbox instead of stretching).
+                // A subtle safe margin (~12 pt / 4mm) on standard A4 pages prevents physical printers
+                // from cutting off document header/footer text.
+                val margin = if (ratio in 1.33f..1.50f) 12f else 0f
+                val targetW = pw - margin * 2f
+                val targetH = ph - margin * 2f
                 val imgAspect = p.width.toFloat() / p.height.coerceAtLeast(1)
-                var dw = pw
-                var dh = pw / imgAspect
-                if (dh > ph) {
-                    dh = ph
-                    dw = ph * imgAspect
+                var dw = targetW
+                var dh = targetW / imgAspect
+                if (dh > targetH) {
+                    dh = targetH
+                    dw = targetH * imgAspect
                 }
                 val ox = (pw - dw) / 2f
                 val oy = (ph - dh) / 2f

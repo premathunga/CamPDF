@@ -155,17 +155,17 @@ object DocDetect {
             val ny = dx / len
             var bestOff = 0
             var bestVal = -Float.MAX_VALUE
-            for (off in -8..8) {
+            for (off in -14..14) {
                 var sum = 0f
                 var cnt = 0
-                for (k in 1..30) {
-                    val t = k / 31f
+                for (k in 1..40) {
+                    val t = k / 41f
                     val x = (a.x + dx * t + nx * off).roundToInt()
                     val y = (a.y + dy * t + ny * off).roundToInt()
                     if (x in 0 until w && y in 0 until h) { sum += mag[y * w + x]; cnt++ }
                 }
-                if (cnt < 10) continue
-                val v = sum / cnt - 2f * abs(off)
+                if (cnt < 12) continue
+                val v = sum / cnt - 0.85f * abs(off)
                 if (v > bestVal) { bestVal = v; bestOff = off }
             }
             ox[i] = a.x + nx * bestOff

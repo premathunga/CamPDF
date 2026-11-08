@@ -233,7 +233,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val result = withContext(Dispatchers.Default) {
                 runCatching {
                     val src = Imaging.loadOriented(raw, 3600) ?: error("load")
-                    val warped = try { Imaging.warp(src, c, 3508) } finally { src.recycle() }
+                    var warped = try { Imaging.warp(src, c, 3508) } finally { src.recycle() }
+                    val autoTurns = Imaging.detectSidewaysOrientation(warped)
+                    if (autoTurns > 0) {
+                        warped = Imaging.rotate(warped, autoTurns)
+                    }
                     val id = idCounter++
                     val f = File(cache, "page_$id.jpg")
                     try { Imaging.saveJpeg(warped, f, 94) } finally { warped.recycle() }
