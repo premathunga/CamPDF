@@ -20,7 +20,7 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
-/** Pure-Kotlin image pipeline: no network, no external SDKs. v2.6.3 (on v2.6.2): MAGIC color-first + faint-heading-safe, BW red gate 12f -> 8f. */
+/** Pure-Kotlin image pipeline: no network, no external SDKs. v2.6.5 (on v2.6.4): auto-rotate 0-vs-180 fixed — red + thick-line + top-ink votes. MAGIC halo fix - colour-tinted paper pixels go white, neighbour-aware sharpen. MAGIC color-first + faint-heading-safe, BW red gate 12f -> 8f. */
 object Imaging {
 
     // ---------- loading ----------
@@ -100,6 +100,21 @@ object Imaging {
      * (forms have a heading / header at the top, footer is sparser).
      * Returns quarter-turns clockwise to apply: 0, 1, 2 or 3.
      */
+    /**
+     * v2.6.5 AUTO-ROTATE: tries all 4 quarter-turns, picks the one whose
+     * text lines are horizontal. 0-vs-180 is decided by 3 votes, NOT by
+     * top-20% ink alone (v2.6.4 bug: this form's bottom 20% has the heavy
+     * blue signature + date, so flipped page scored MORE top ink and came
+     * out upside-down).
+     * Votes for 0 vs 180 (measured on the unrotated image):
+     *  1. RED ink: red number/stamp is at the TOP of this form (y ~3%).
+     *     If red centroid y > 50%, page is flipped. Weight 3.
+     *  2. THICKEST horizontal line: the thick separator above the
+     *     signature block sits at y ~78% upright. Row with max ink
+     *     count in bottom half -> upright. Weight 2.
+     *  3. Top-20% ink share: weak tie-break only. Weight 1.
+     * Same logic transposed for 90 vs 270. Returns quarter-turns CW: 0..3.
+     */
     fun detectOrientationQuarterTurns(bm: Bitmap): Int {
         val sc = 320f / max(bm.width, bm.height)
         val sw = (bm.width * sc).roundToInt().coerceAtLeast(32)
@@ -108,44 +123,60 @@ object Imaging {
         val px = IntArray(sw * sh)
         small.getPixels(px, 0, sw, 0, 0, sw, sh)
         if (small !== bm) small.recycle()
-        // Dark-pixel mask (ink), ignoring near-white paper
         val ink = BooleanArray(sw * sh) { i ->
             val p = px[i]
             val lum = ((p shr 16) and 255) * 0.299f + ((p shr 8) and 255) * 0.587f + (p and 255) * 0.114f
             lum < 180f
         }
-        fun scoreFor(rot: Int): Pair<Float, Float> {
-            // rows after rotation: 0 -> sh rows, 1/3 -> sw rows, 2 -> sh rows
-            val rows = if (rot % 2 == 0) sh else sw
-            val counts = FloatArray(rows)
-            var total = 0f
-            for (y in 0 until sh) for (x in 0 until sw) {
-                if (!ink[y * sw + x]) continue
-                val r = when (rot) {
-                    0 -> y
-                    1 -> x // 90 CW: new row = old x
-                    2 -> sh - 1 - y
-                    else -> sw - 1 - x // 270 CW
-                }
-                counts[r]++; total++
-            }
-            if (total < 50f) return Pair(0f, 0f)
-            val mean = total / rows
-            var varSum = 0f
-            for (c in counts) varSum += (c - mean) * (c - mean)
-            val variance = varSum / rows
-            // top-20% ink share (for 0-vs-180 tie-break)
-            val topN = (rows * 0.20f).toInt().coerceAtLeast(1)
-            var top = 0f
-            for (i in 0 until topN) top += counts[i]
-            return Pair(variance, top / total)
+        fun isRedPx(p: Int): Boolean {
+            val r = (p shr 16) and 255; val g = (p shr 8) and 255; val b = p and 255
+            return (r - g > 10) && (r - b > 10) && r > 90
         }
-        val s0 = scoreFor(0); val s1 = scoreFor(1); val s2 = scoreFor(2); val s3 = scoreFor(3)
-        val horiz = if (s0.first >= s2.first) Pair(0, s0) else Pair(2, s2)
-        val vert = if (s1.first >= s3.first) Pair(1, s1) else Pair(3, s3)
-        // Horizontal must win clearly; if vertical is within 15%, prefer horizontal
-        // (forms are portrait, and vertical borders inflate vertical score slightly)
-        return if (horiz.second.first >= vert.second.first * 0.85f) horiz.first else vert.first
+        // Row / column ink counts on unrotated image
+        val rowCnt = FloatArray(sh); val colCnt = FloatArray(sw)
+        var redSumY = 0f; var redCnt = 0f; var redSumX = 0f
+        for (y in 0 until sh) for (x in 0 until sw) {
+            if (ink[y * sw + x]) { rowCnt[y]++; colCnt[x]++ }
+            if (isRedPx(px[y * sw + x])) { redSumY += y; redSumX += x; redCnt++ }
+        }
+        fun variance(counts: FloatArray): Float {
+            val total = counts.sum(); if (total < 50f) return 0f
+            val mean = total / counts.size; var v = 0f
+            for (c in counts) v += (c - mean) * (c - mean)
+            return v / counts.size
+        }
+        // --- 0 vs 180 vote (horizontal text) ---
+        var vote0 = 0f; var vote180 = 0f
+        if (redCnt > 20f) {
+            val redY = redSumY / redCnt / sh
+            if (redY < 0.5f) vote0 += 3f else vote180 += 3f
+        }
+        var maxRow = 0; var maxRowVal = -1f
+        for (y in 0 until sh) if (rowCnt[y] > maxRowVal) { maxRowVal = rowCnt[y]; maxRow = y }
+        if (maxRowVal > 0f) { if (maxRow.toFloat() / sh > 0.5f) vote0 += 2f else vote180 += 2f }
+        var top20 = 0f; var bot20 = 0f
+        for (y in 0 until (sh * 0.20f).toInt()) top20 += rowCnt[y]
+        for (y in (sh * 0.80f).toInt() until sh) bot20 += rowCnt[y]
+        if (top20 > bot20) vote0 += 1f else vote180 += 1f
+        val horizRot = if (vote0 >= vote180) 0 else 2
+        val horizVar = variance(rowCnt)
+        // --- 90 vs 270 vote (vertical text) — same logic transposed ---
+        var vote90 = 0f; var vote270 = 0f
+        if (redCnt > 20f) {
+            val redX = redSumX / redCnt / sw
+            if (redX < 0.5f) vote90 += 3f else vote270 += 3f
+        }
+        var maxCol = 0; var maxColVal = -1f
+        for (x in 0 until sw) if (colCnt[x] > maxColVal) { maxColVal = colCnt[x]; maxCol = x }
+        if (maxColVal > 0f) { if (maxCol.toFloat() / sw > 0.5f) vote90 += 2f else vote270 += 2f }
+        var left20 = 0f; var right20 = 0f
+        for (x in 0 until (sw * 0.20f).toInt()) left20 += colCnt[x]
+        for (x in (sw * 0.80f).toInt() until sw) right20 += colCnt[x]
+        if (left20 > right20) vote90 += 1f else vote270 += 1f
+        val vertRot = if (vote90 >= vote270) 1 else 3
+        val vertVar = variance(colCnt)
+        // Horizontal must win clearly; vertical borders inflate vertical score slightly
+        return if (horizVar >= vertVar * 0.85f) horizRot else vertRot
     }
 
     /** Back-compat wrapper: 1 = sideways (90 or 270), 0 = upright / upside-down. */
@@ -896,9 +927,14 @@ object Imaging {
                                 gg = fG.toInt().coerceIn(0, 255)
                                 bb = fB.toInt().coerceIn(0, 255)
                             } else if (normL > 190f) {
-                                // Paper OR faint grey heading - split by stroke strength
+                                // v2.6.4 HALO FIX: pixels around blue/red ink carry a faint
+                                // colour tint (light-blue halo from pen + JPEG). They are NOT
+                                // faint grey headings. Deepening them makes the grey smudge
+                                // behind blue handwriting in v2.6.3. Faint headings are
+                                // near-grey: sat < 0.04. Anything with colour -> white.
+                                val isColourHalo = sat > 0.04f || (normB - normR > 3f) || (normR - normB > 3f) || (normG - normR > 3f)
                                 val stroke = ((232f - normL) / 232f).coerceIn(0f, 1f)
-                                if (stroke < 0.04f) {
+                                if (stroke < 0.04f || isColourHalo) {
                                     // True paper background: smooth into 100% pure spotless white
                                     val tt = ((normL - 190f) / 45f).coerceIn(0f, 1f)
                                     val tw = tt * tt * (3f - 2f * tt)
@@ -984,7 +1020,15 @@ object Imaging {
                     val cmax = max(cr, max(cg, cb))
                     val cmin = min(cr, min(cg, cb))
                     val cSat = if (cmax > 10) (cmax - cmin).toFloat() / cmax else 0f
-                    val isColouredPixel = cSat > 0.18f && (cmax - cmin) > 25
+                    // v2.6.4: centre OR any neighbour coloured -> low sharpen.
+                    // Halo pixels are grey themselves, so centre-only check missed them.
+                    fun isColouredPx(p: Int): Boolean {
+                        val pr = (p shr 16) and 255; val pg = (p shr 8) and 255; val pb = p and 255
+                        val pmx = max(pr, max(pg, pb)); val pmn = min(pr, min(pg, pb))
+                        return pmx > 10 && (pmx - pmn).toFloat() / pmx > 0.18f && (pmx - pmn) > 25
+                    }
+                    val isColouredPixel = cSat > 0.18f && (cmax - cmin) > 25 ||
+                        isColouredPx(up) || isColouredPx(dn) || isColouredPx(lf) || isColouredPx(rt)
                     val amtForPixel = if (isColouredPixel) sharp * 0.2f else sharp
                     val r2 = sharpenCh(c, up, dn, lf, rt, 16, amtForPixel)
                     val o = (j - 1) * w + x
