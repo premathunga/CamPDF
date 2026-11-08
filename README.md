@@ -62,9 +62,14 @@ These are algorithmic improvements, not a claim of parity with CamScanner. Test 
 ## v2.6.0 - CamScanner-inspired Color-Preserving Magic Engine & Professional Enhancements
 - **Color-Preserving Magic Color (`FilterMode.MAGIC`):**
   - Pixels are classified into colored ink vs. neutral printed text vs. paper background.
-  - Handwritten blue pens, red pens, green/purple notes, and colored official rubber stamps are explicitly preserved and saturation-boosted (+30%), preventing ink from turning to pure black or fading out.
+  - Handwritten blue pens, red pens, green/purple notes, and colored official rubber stamps are explicitly preserved and saturation-boosted (+35%), preventing ink from turning to pure black or fading out.
   - Neutral printed text and pencil strokes are deepened into solid jet black using a high-contrast curve.
   - Paper background and subtle shadows smoothly blend into 100% spotless white (255, 255, 255).
+- **Anti-Bleaching & Faint Text Preservation (v2.6.1):**
+  - Solved heading/sub-heading bleaching on bright document regions using a stroke-aware Sigmoid contrast curve.
+  - Faint Sinhala/Tamil headings, sub-titles, and thin table grid lines (luminance 160–210) are deepened rather than washed into paper white.
+  - Sensitive blue ink threshold (`normB - normR > 4f`) ensures faint ballpoint pen notes and header numbers stay visible in vivid blue.
+  - Added edge obstruction removal (< 55 brightness) in `detectFingers` to clean dark binder clips and margin thumb smudges.
 - **Red ink & stamp protection in B&W mode (`FilterMode.BW`):**
   - Added red-channel absorption check so red seals and red pen marks are rendered as solid crisp black rather than disappearing into the white background.
 - **Enhanced Edge Snapping (`DocDetect.kt`):**
