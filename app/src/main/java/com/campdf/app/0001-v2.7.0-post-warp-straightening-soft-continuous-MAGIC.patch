@@ -1,0 +1,774 @@
+From 38fff5efaa82eeba32273237674e2f76a6484c90 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 8 Nov 2026 17:00:40 +0000
+Subject: [PATCH] v2.7.0: post-warp straightening, soft continuous MAGIC
+ filter, coloured-strip trim, PC test harness
+
+---
+ README.md                                   |  17 ++
+ app/src/main/java/com/campdf/app/Imaging.kt | 297 ++++++++++++++------
+ tools/jvmtest/Main.kt                       |  20 ++
+ tools/jvmtest/README.txt                    |   5 +
+ tools/jvmtest/stubs/AndroidGraphics.kt      | 152 ++++++++++
+ tools/jvmtest/stubs/Exif.kt                 |  10 +
+ tools/prototype/v2_7/README.txt             |   5 +
+ tools/prototype/v2_7/pipe.py                | 120 ++++++++
+ tools/prototype/v2_7/run.py                 |  13 +
+ 9 files changed, 548 insertions(+), 91 deletions(-)
+ create mode 100644 tools/jvmtest/Main.kt
+ create mode 100644 tools/jvmtest/README.txt
+ create mode 100644 tools/jvmtest/stubs/AndroidGraphics.kt
+ create mode 100644 tools/jvmtest/stubs/Exif.kt
+ create mode 100644 tools/prototype/v2_7/README.txt
+ create mode 100644 tools/prototype/v2_7/pipe.py
+ create mode 100644 tools/prototype/v2_7/run.py
+
+diff --git a/README.md b/README.md
+index 5c99772..44d3005 100644
+--- a/README.md
++++ b/README.md
+@@ -78,3 +78,20 @@ These are algorithmic improvements, not a claim of parity with CamScanner. Test
+   - Added text line gradient variance detector (`detectSidewaysOrientation`) that automatically detects and straightens 90-degree sideways captures during crop confirmation.
+ - **Print-Safe Margins (`PdfWriter.kt`):**
+   - Added standard 12 pt safe margins on standardized A4 exports, preventing physical printers from clipping document headers and footers.
++
++
++## v2.7.0 - straight pages, soft ink (Imaging.kt)
++- **Post-warp straightening (`straighten`)**: after the perspective warp, the slope of the text lines / rules is measured in 6 horizontal
++  bands (projection-profile search on a small copy), a line is fitted through the band angles and one homography removes the
++  residual rotation *and* keystone. Unsure (little text, angle at the search limit) -> page left unchanged. Test photo: lines went
++  from ~3 deg (top) / ~1 deg (bottom) off to < 0.4 deg everywhere.
++  Limit: only horizontal structure is measured; a vertical lean caused by a bad corner quad is not corrected - adjust the corners.
++- **`MAGIC` is now continuous** (`FilterMode.MAGIC`): one tone curve on luminance + the pixel's own chroma boosted x2.8 and faded to
++  zero towards paper. The old hard ink / halo / paper branches cut the anti-aliased edges of pen strokes (thick, ragged, posterised
++  handwriting). Sharpening for MAGIC is luminance-only with a +-4 level overshoot clamp (no grey fringe on coloured ink).
++  Constants: `MAGIC_BLACK`, `MAGIC_WHITE`, `MAGIC_CHROMA`.
++- **`trimBorders`**: also trims clearly coloured strips (pink folder, cloth) relative to the page colour, up to 8% per side.
++- Known: a large cast shadow that is bigger than the illumination filter (e.g. a phone shadow over the page bottom) is still not
++  fully flattened; automatic corner detection can pick up neighbouring white sheets in a cluttered scene.
++- References/tests: `tools/prototype/v2_7/` (Python), `tools/jvmtest/` (runs the real Kotlin on a PC). Compiled and run on a PC with
++  stubs; not yet compiled/tested with the Android SDK or on a device.
+diff --git a/app/src/main/java/com/campdf/app/Imaging.kt b/app/src/main/java/com/campdf/app/Imaging.kt
+index 824706b..a1039b9 100644
+--- a/app/src/main/java/com/campdf/app/Imaging.kt
++++ b/app/src/main/java/com/campdf/app/Imaging.kt
+@@ -304,12 +304,154 @@ object Imaging {
+             return Bitmap.createScaledBitmap(src, ow, oh, true)
+         }
+         Canvas(out).drawBitmap(src, m, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
+-        return trimBorders(out)
++        return trimBorders(straighten(out))
++    }
++
++    /**
++     * v2.7.0: post-warp straightening. A corner quad is never exact, so text lines come out slightly rotated,
++     * and by a different amount at the top and the bottom of the page (keystone). The slope of the ink rows
++     * is measured in horizontal bands (projection-profile search on a small copy, no per-pixel rotation), a
++     * line is fitted through the band angles and one homography levels the lines over the whole page.
++     * When the measurement is unsure (too little text, angles at the search limit) the bitmap is returned unchanged.
++     */
++    private fun straighten(bm: Bitmap): Bitmap {
++        val w = bm.width
++        val h = bm.height
++        if (w < 300 || h < 300) return bm
++        val f = max(1, max(w, h) / 500)
++        val sw = w / f
++        val sh = h / f
++        val small = Bitmap.createScaledBitmap(bm, sw, sh, true)
++        val px = IntArray(sw * sh)
++        small.getPixels(px, 0, sw, 0, 0, sw, sh)
++        if (small !== bm) small.recycle()
++        val lum = FloatArray(px.size) { luma(px[it]) }
++        val rr = max(4, sw / 25)
++        val bgm = boxBlurSeparable(boxBlurSeparable(lum, sw, sh, rr), sw, sh, rr)
++        val nb = 6
++        val bh = sh / nb
++        val xa = (sw * 0.1f).toInt()
++        val xb = (sw * 0.9f).toInt()
++        val ys = ArrayList<Float>()
++        val angs = ArrayList<Float>()
++        val wts = ArrayList<Float>()
++        val bins = IntArray(sh + 2 * sw + 8)
++        for (i in 0 until nb) {
++            val y0 = i * bh
++            val y1 = min(sh, y0 + bh + bh / 2)
++            if (y1 <= y0 || xb <= xa) continue
++            val cap = (y1 - y0) * (xb - xa)
++            val ix = IntArray(cap)
++            val iy = IntArray(cap)
++            var n = 0
++            for (y in y0 until y1) {
++                val row = y * sw
++                for (x in xa until xb) {
++                    val b = bgm[row + x]
++                    if (b > 60f && lum[row + x] < b * 0.78f) {
++                        ix[n] = x - sw / 2
++                        iy[n] = y
++                        n++
++                    }
++                }
++            }
++            if (n < 200) continue
++            // sharpness of the row histogram when the ink is projected along a line of slope `deg`
++            fun score(deg: Float): Double {
++                val rad = Math.toRadians(deg.toDouble())
++                val cs = kotlin.math.cos(rad).toFloat()
++                val sn = kotlin.math.sin(rad).toFloat()
++                java.util.Arrays.fill(bins, 0)
++                for (k in 0 until n) {
++                    val r = iy[k] * cs - ix[k] * sn
++                    bins[(r + sw).toInt()]++
++                }
++                var s = 0.0
++                for (k in 1 until bins.size) {
++                    val d = (bins[k] - bins[k - 1]).toDouble()
++                    s += d * d
++                }
++                return s
++            }
++            var best = 0f
++            var bestS = -1.0
++            var a = -6f
++            while (a <= 6.001f) {
++                val sc = score(a)
++                if (sc > bestS) { bestS = sc; best = a }
++                a += 0.25f
++            }
++            if (abs(best) > 5.8f) continue // at the search limit: not a real text-line direction
++            val c0 = best
++            a = c0 - 0.25f
++            while (a <= c0 + 0.25f) {
++                val sc = score(a)
++                if (sc > bestS) { bestS = sc; best = a }
++                a += 0.05f
++            }
++            ys.add((y0 + y1) / 2f * f)
++            angs.add(best)
++            wts.add(n.toFloat())
++        }
++        if (ys.size < 2) return bm
++        // robust weighted line fit: angle(y) = a0 + a1 * y
++        var idx = ys.indices.toList()
++        var a0 = 0f
++        var a1 = 0f
++        for (iter in 0 until 3) {
++            var sumW = 0.0
++            var sx = 0.0
++            var sy = 0.0
++            var sxx = 0.0
++            var sxy = 0.0
++            for (k in idx) {
++                val wt = wts[k].toDouble()
++                sumW += wt
++                sx += wt * ys[k]
++                sy += wt * angs[k]
++                sxx += wt * ys[k] * ys[k]
++                sxy += wt * ys[k] * angs[k]
++            }
++            val den = sumW * sxx - sx * sx
++            if (abs(den) < 1e-6) {
++                a1 = 0f
++                a0 = (sy / sumW).toFloat()
++            } else {
++                a1 = ((sumW * sxy - sx * sy) / den).toFloat()
++                a0 = ((sy - a1 * sx) / sumW).toFloat()
++            }
++            val res = idx.map { abs(angs[it] - (a0 + a1 * ys[it])) }.sorted()
++            val lim = max(0.6f, 2f * res[res.size / 2])
++            val keep = idx.filter { abs(angs[it] - (a0 + a1 * ys[it])) < lim }
++            if (keep.size < 2 || keep.size == idx.size) break
++            idx = keep
++        }
++        val at = a0
++        val ab = a0 + a1 * h
++        if (abs(at) < 0.15f && abs(ab) < 0.15f) return bm
++        if (abs(at) > 7f || abs(ab) > 7f) return bm
++        val tt = Math.tan(Math.toRadians(at.toDouble())).toFloat()
++        val tb = Math.tan(Math.toRadians(ab.toDouble())).toFloat()
++        // the page as it is: top line has slope tt, bottom line slope tb, sides stay vertical
++        val sy4 = floatArrayOf(0f, w * tt, h + w * tb, h.toFloat())
++        val shift = (sy4[0] + sy4[1] + sy4[2] + sy4[3]) / 4f - h / 2f
++        val src = floatArrayOf(
++            0f, sy4[0] - shift, w.toFloat(), sy4[1] - shift,
++            w.toFloat(), sy4[2] - shift, 0f, sy4[3] - shift
++        )
++        val dst = floatArrayOf(0f, 0f, w.toFloat(), 0f, w.toFloat(), h.toFloat(), 0f, h.toFloat())
++        val m = Matrix()
++        if (!m.setPolyToPoly(src, 0, dst, 0, 4)) return bm
++        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
++        out.eraseColor(android.graphics.Color.WHITE)
++        Canvas(out).drawBitmap(bm, m, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
++        bm.recycle()
++        return out
+     }
+ 
+     /**
+      * Removes thin strips of background (table / cloth) that remain along the borders after the crop,
+-     * e.g. from torn or folded page edges. Trims at most 5% per side and only when the page itself is light.
++     * e.g. from torn or folded page edges. Trims at most 8% per side and only when the page itself is light.
+      */
+     private fun trimBorders(bm: Bitmap): Bitmap {
+         val w = bm.width
+@@ -339,15 +481,32 @@ object Imaging {
+         }
+         if (ref < 110) return bm
+         val thr = ref * 0.62f
+-        val maxT = max(2, (min(sw, sh) * 0.05f).toInt())
++        // v2.7.0: a strip is also background when it is clearly coloured compared with the page (pink folder, cloth)
++        fun chromaOf(p: Int): Int {
++            val r = (p shr 16) and 255
++            val g = (p shr 8) and 255
++            val b = p and 255
++            return max(r, max(g, b)) - min(r, min(g, b))
++        }
++        var chromaSum = 0L
++        var chromaCnt = 0
++        for (y in sh / 4 until sh * 3 / 4) {
++            for (x in sw / 4 until sw * 3 / 4) {
++                chromaSum += chromaOf(px[y * sw + x])
++                chromaCnt++
++            }
++        }
++        val chromaLim = (if (chromaCnt > 0) (chromaSum / chromaCnt).toInt() else 0) + 30
++        val bad = BooleanArray(px.size) { lum[it] < thr || chromaOf(px[it]) > chromaLim }
++        val maxT = max(2, (min(sw, sh) * 0.08f).toInt())
+         fun rowFrac(y: Int): Float {
+             var n = 0
+-            for (x in 0 until sw) if (lum[y * sw + x] < thr) n++
++            for (x in 0 until sw) if (bad[y * sw + x]) n++
+             return n.toFloat() / sw
+         }
+         fun colFrac(x: Int): Float {
+             var n = 0
+-            for (y in 0 until sh) if (lum[y * sw + x] < thr) n++
++            for (y in 0 until sh) if (bad[y * sw + x]) n++
+             return n.toFloat() / sh
+         }
+         var top = 0
+@@ -527,6 +686,11 @@ object Imaging {
+         return Pair(pct(0.005f), pct(0.97f))
+     }
+ 
++    // v2.7.0 MAGIC tone curve / colour (tuned in tools/prototype/v2_7)
++    private const val MAGIC_BLACK = 0.28f
++    private const val MAGIC_WHITE = 0.90f
++    private const val MAGIC_CHROMA = 2.8f
++
+     private val CONTRAST_LUT = FloatArray(256) { i ->
+         if (i < 200) (200f * (i / 200f).pow(1.30f)).coerceIn(0f, 255f) else i.toFloat()
+     }
+@@ -775,7 +939,7 @@ object Imaging {
+         }
+         val baseSharp = when (mode) {
+             FilterMode.BW -> 0.9f
+-            FilterMode.MAGIC -> 0.28f // v2.6.6: lower base to further reduce grey fringe
++            FilterMode.MAGIC -> 0.9f // v2.7.0: luminance-only sharpen (see post pass), chroma is never sharpened
+             FilterMode.ENHANCE -> 0.6f
+             else -> 0.5f
+         }
+@@ -894,90 +1058,23 @@ object Imaging {
+                             rr = v; gg = v; bb = v
+                         }
+                         FilterMode.MAGIC -> {
+-                            // v2.6.6 CamScanner-style Color-Preserving Magic Engine
+-                            // Goals: vivid blue/red pens + signatures, zero grey halo under ink,
+-                            // pure white paper, deep black printed text, faint headings protected.
+-                            val maxC = max(normR, max(normG, normB))
+-                            val minC = min(normR, min(normG, normB))
+-                            val chroma = maxC - minC
+-                            val sat = if (maxC > 8f) chroma / maxC else 0f
+-
+-                            // Looser gates so light ballpoint / faded blue still count as ink
+-                            val isBlueInk = (normB - normR > 3f) && (normB - normG > 1.5f) && normB > 70f
+-                            val isRedInk  = (normR - normG > 8f) && (normR - normB > 8f) && normR > 80f
+-                            val isGreenInk = (normG - normR > 7f) && (normG - normB > 7f)
+-                            val isColorInk = (sat > 0.055f && chroma > 5f && normL < 238f) ||
+-                                             isBlueInk || isRedInk || isGreenInk
+-
+-                            if (isColorInk) {
+-                                // Colored ink / pen / stamps: keep hue, boost saturation, never lighten
+-                                val mean = (normR + normG + normB) / 3f
+-                                val satBoost = when {
+-                                    isRedInk  -> 2.8f
+-                                    isBlueInk -> 2.35f
+-                                    else      -> 2.0f
+-                                }
+-                                // Darken faint strokes so they stay readable
+-                                val inkGain = when {
+-                                    normL > 185f -> 0.78f
+-                                    normL > 140f -> 0.88f
+-                                    else         -> 0.95f
+-                                }
+-                                var fR = (mean + (normR - mean) * satBoost) * inkGain
+-                                var fG = (mean + (normG - mean) * satBoost) * inkGain
+-                                var fB = (mean + (normB - mean) * satBoost) * inkGain
+-
+-                                // NEVER-BRIGHTEN clamp (critical for clean ink)
+-                                val outLum = fR * 0.299f + fG * 0.587f + fB * 0.114f
+-                                if (outLum > normL && outLum > 1f) {
+-                                    val k = normL / outLum
+-                                    fR *= k; fG *= k; fB *= k
+-                                }
+-                                rr = fR.toInt().coerceIn(0, 255)
+-                                gg = fG.toInt().coerceIn(0, 255)
+-                                bb = fB.toInt().coerceIn(0, 255)
+-                            } else if (normL > 185f) {
+-                                // Paper + colour-halo region
+-                                // Any residual colour tint from pen bleed / JPEG → pure white
+-                                // (this kills the grey under blue handwriting)
+-                                val isColourHalo = sat > 0.028f ||
+-                                    (normB - normR > 2.0f) || (normR - normB > 2.0f) ||
+-                                    (normG - normR > 2.0f) || (normG - normB > 2.0f)
+-                                val stroke = ((235f - normL) / 235f).coerceIn(0f, 1f)
+-
+-                                if (stroke < 0.035f || isColourHalo) {
+-                                    // True paper or halo → force toward pure white
+-                                    val tt = ((normL - 185f) / 50f).coerceIn(0f, 1f)
+-                                    val tw = tt * tt * (3f - 2f * tt)
+-                                    // Extra push to pure white for residual tint
+-                                    val push = if (isColourHalo) 0.92f else 0.78f
+-                                    val tw2 = tw * push + (1f - push)
+-                                    rr = (normR + (255f - normR) * tw2).toInt().coerceIn(0, 255)
+-                                    gg = (normG + (255f - normG) * tw2).toInt().coerceIn(0, 255)
+-                                    bb = (normB + (255f - normB) * tw2).toInt().coerceIn(0, 255)
+-                                } else {
+-                                    // Faint printed heading / thin table line (near-grey)
+-                                    // Deepen carefully, never bleach
+-                                    val tt2 = ((stroke - 0.035f) / 0.22f).coerceIn(0f, 1f)
+-                                    val s = tt2 * tt2 * (3f - 2f * tt2)
+-                                    val enhanced = (s.toDouble().pow(0.68)).toFloat() * 0.88f
+-                                    val targetL = (255f * (1f - enhanced)).coerceIn(0f, 255f)
+-                                    val gain = min(1f, targetL / max(normL, 1f))
+-                                    rr = (normR * gain).toInt().coerceIn(0, 255)
+-                                    gg = (normG * gain).toInt().coerceIn(0, 255)
+-                                    bb = (normB * gain).toInt().coerceIn(0, 255)
+-                                }
+-                            } else {
+-                                // Printed black text / pencil → deep solid black
+-                                val bp = 85f
+-                                val wp = 185f
+-                                val tl = ((normL - bp) / (wp - bp)).coerceIn(0f, 1f)
+-                                val gl = 255f * tl.pow(1.42f)
+-                                val gain = min(1f, gl / max(normL, 1f))
+-                                rr = (normR * gain).toInt().coerceIn(0, 255)
+-                                gg = (normG * gain).toInt().coerceIn(0, 255)
+-                                bb = (normB * gain).toInt().coerceIn(0, 255)
+-                            }
++                            // v2.7.0: soft, continuous, colour-preserving. No hard ink / halo / paper branches:
++                            // the old branches cut the anti-aliased edge of every pen stroke, which gave
++                            // thick, ragged, posterised handwriting.
++                            //  - luminance goes through one smooth tone curve (paper -> 1, ink deepened)
++                            //  - colour = the pixel's own chroma (value - luminance), boosted, and faded
++                            //    to zero towards paper, so the paper is exactly white and the ink keeps its hue
++                            val l = normL / 255f
++                            val t = ((l - MAGIC_BLACK) / (MAGIC_WHITE - MAGIC_BLACK)).coerceIn(0f, 1f)
++                            val lOut = if (l >= MAGIC_WHITE) 1f else t.pow(1.25f)
++                            val k = MAGIC_CHROMA * smooth01((0.93f - l) / 0.25f)
++                            val cr = (normR - normL) / 255f
++                            val cg = (normG - normL) / 255f
++                            val cb = (normB - normL) / 255f
++                            rr = ((lOut + cr * k) * 255f).toInt().coerceIn(0, 255)
++                            gg = ((lOut + cg * k) * 255f).toInt().coerceIn(0, 255)
++                            bb = ((lOut + cb * k) * 255f).toInt().coerceIn(0, 255)
++                            if (lOut > 0.985f && k < 0.05f) { rr = 255; gg = 255; bb = 255 }
+                         }
+                         FilterMode.ENHANCE -> {
+                             // colour-preserving: all three channels get the same light correction
+@@ -1052,8 +1149,26 @@ object Imaging {
+                     // Black text and clean paper keep full sharpen
+                     val amtForPixel = if (isColouredPixel) sharp * 0.10f else sharp
+ 
+-                    val r2 = sharpenCh(c, up, dn, lf, rt, 16, amtForPixel)
+                     val o = (j - 1) * w + x
++                    if (mode == FilterMode.MAGIC) {
++                        // v2.7.0: sharpen luminance only, the same delta on R, G and B, so colour edges never get
++                        // a grey fringe; the result may not overshoot the 4-neighbourhood by more than 4 levels
++                        val lc = luma(c)
++                        val lu = luma(up)
++                        val ld = luma(dn)
++                        val ll = luma(lf)
++                        val lr = luma(rt)
++                        val avgL = (4f * lc + lu + ld + ll + lr) / 8f
++                        val hiL = max(max(lu, ld), max(max(ll, lr), lc)) + 4f
++                        val loL = min(min(lu, ld), min(min(ll, lr), lc)) - 4f
++                        val d = (lc + sharp * (lc - avgL)).coerceIn(loL, hiL) - lc
++                        val mr = (cr + d).toInt().coerceIn(0, 255)
++                        val mg = (cg + d).toInt().coerceIn(0, 255)
++                        val mb = (cb + d).toInt().coerceIn(0, 255)
++                        outBuf[o] = (0xFF shl 24) or (mr shl 16) or (mg shl 8) or mb
++                        continue
++                    }
++                    val r2 = sharpenCh(c, up, dn, lf, rt, 16, amtForPixel)
+                     if (mode == FilterMode.BW) {
+                         val t = ((r2 - (bwThreshold - 36f)) / 72f).coerceIn(0f, 1f)
+                         val v = (255f * t * t * (3f - 2f * t)).toInt()
+diff --git a/tools/jvmtest/Main.kt b/tools/jvmtest/Main.kt
+new file mode 100644
+index 0000000..3d74312
+--- /dev/null
++++ b/tools/jvmtest/Main.kt
+@@ -0,0 +1,20 @@
++import android.graphics.*
++import com.campdf.app.*
++import javax.imageio.ImageIO
++import java.io.File
++
++fun main(args: Array<String>) {
++    val path = args[0]; val outPath = args[1]; val mode = FilterMode.valueOf(args[2])
++    val quadArg = args.getOrNull(3)
++    val src = Imaging.loadOriented(path, 3600)!!
++    val corners: FloatArray = if (quadArg == null || quadArg == "auto") {
++        val c = Imaging.detectCornersOrNull(path); println("auto corners = ${c?.toList()}"); c ?: Imaging.detectCorners(path)
++    } else quadArg.split(",").map { it.toFloat() }.toFloatArray().let { q ->
++        FloatArray(8) { if (it % 2 == 0) q[it] / (src.width - 1) else q[it] / (src.height - 1) } }
++    val t0 = System.currentTimeMillis()
++    val warped = Imaging.warp(src, corners, 3508)
++    println("warped ${warped.width}x${warped.height}  (${System.currentTimeMillis() - t0} ms)")
++    val out = Imaging.applyFilter(warped, mode)
++    println("done ${out.width}x${out.height}  (${System.currentTimeMillis() - t0} ms)")
++    ImageIO.write(out.toImage(), "png", File(outPath))
++}
+diff --git a/tools/jvmtest/README.txt b/tools/jvmtest/README.txt
+new file mode 100644
+index 0000000..b33fbd0
+--- /dev/null
++++ b/tools/jvmtest/README.txt
+@@ -0,0 +1,5 @@
++Run the REAL Imaging.kt / DocDetect.kt on a PC (no Android SDK): small JVM stubs for android.graphics.*.
++  kotlinc tools/jvmtest/stubs/*.kt app/src/main/java/com/campdf/app/{Imaging,DocDetect,Models}.kt tools/jvmtest/Main.kt -include-runtime -d t.jar
++  java -Xmx2g -jar t.jar photo.jpg out.png MAGIC auto                      # app's own corner detection
++  java -Xmx2g -jar t.jar photo.jpg out.png MAGIC "x0,y0,x1,y1,x2,y2,x3,y3"  # corners in pixels TL,TR,BR,BL
++The stubs are only for testing (bilinear resampling approximates Android's); never part of the app build.
+diff --git a/tools/jvmtest/stubs/AndroidGraphics.kt b/tools/jvmtest/stubs/AndroidGraphics.kt
+new file mode 100644
+index 0000000..e98c889
+--- /dev/null
++++ b/tools/jvmtest/stubs/AndroidGraphics.kt
+@@ -0,0 +1,152 @@
++package android.graphics
++
++import java.awt.image.BufferedImage
++import java.io.File
++import java.io.OutputStream
++import javax.imageio.IIOImage
++import javax.imageio.ImageIO
++import javax.imageio.ImageWriteParam
++import javax.imageio.stream.MemoryCacheImageOutputStream
++import kotlin.math.*
++
++object Color { const val WHITE = -1; const val BLACK = -16777216 }
++
++open class ColorFilter
++class ColorMatrix(val a: FloatArray)
++class ColorMatrixColorFilter(val cm: ColorMatrix) : ColorFilter()
++class RectF(val l: Float, val t: Float, val r: Float, val b: Float)
++
++class Paint(val flags: Int = 0) {
++    constructor() : this(0)
++    var colorFilter: ColorFilter? = null
++    companion object { const val ANTI_ALIAS_FLAG = 1; const val FILTER_BITMAP_FLAG = 2 }
++}
++
++class Matrix {
++    var m = doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
++    private fun mul(a: DoubleArray, b: DoubleArray): DoubleArray {
++        val r = DoubleArray(9)
++        for (i in 0..2) for (j in 0..2) { var s = 0.0; for (k in 0..2) s += a[i * 3 + k] * b[k * 3 + j]; r[i * 3 + j] = s }
++        return r
++    }
++    fun postRotate(deg: Float) { val r = Math.toRadians(deg.toDouble()); val c = cos(r); val s = sin(r)
++        m = mul(doubleArrayOf(c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0), m) }
++    fun postScale(sx: Float, sy: Float) { m = mul(doubleArrayOf(sx.toDouble(), 0.0, 0.0, 0.0, sy.toDouble(), 0.0, 0.0, 0.0, 1.0), m) }
++    fun postTranslate(dx: Float, dy: Float) { m = mul(doubleArrayOf(1.0, 0.0, dx.toDouble(), 0.0, 1.0, dy.toDouble(), 0.0, 0.0, 1.0), m) }
++    fun setPolyToPoly(src: FloatArray, si: Int, dst: FloatArray, di: Int, n: Int): Boolean {
++        if (n != 4) return false
++        val A = Array(8) { DoubleArray(9) }
++        for (i in 0 until 4) {
++            val x = src[si + 2 * i].toDouble(); val y = src[si + 2 * i + 1].toDouble()
++            val u = dst[di + 2 * i].toDouble(); val v = dst[di + 2 * i + 1].toDouble()
++            A[2 * i] = doubleArrayOf(x, y, 1.0, 0.0, 0.0, 0.0, -u * x, -u * y, u)
++            A[2 * i + 1] = doubleArrayOf(0.0, 0.0, 0.0, x, y, 1.0, -v * x, -v * y, v)
++        }
++        for (c in 0 until 8) {
++            var p = c; for (r in c + 1 until 8) if (abs(A[r][c]) > abs(A[p][c])) p = r
++            if (abs(A[p][c]) < 1e-12) return false
++            val t = A[c]; A[c] = A[p]; A[p] = t
++            for (r in 0 until 8) if (r != c) { val f = A[r][c] / A[c][c]; for (k in c..8) A[r][k] -= f * A[c][k] }
++        }
++        val h = DoubleArray(9) { if (it < 8) A[it][8] / A[it][it] else 1.0 }
++        m = h; return true
++    }
++    fun invert(): DoubleArray? {
++        val a = m
++        val det = a[0]*(a[4]*a[8]-a[5]*a[7]) - a[1]*(a[3]*a[8]-a[5]*a[6]) + a[2]*(a[3]*a[7]-a[4]*a[6])
++        if (abs(det) < 1e-18) return null
++        return doubleArrayOf(
++            (a[4]*a[8]-a[5]*a[7])/det, (a[2]*a[7]-a[1]*a[8])/det, (a[1]*a[5]-a[2]*a[4])/det,
++            (a[5]*a[6]-a[3]*a[8])/det, (a[0]*a[8]-a[2]*a[6])/det, (a[2]*a[3]-a[0]*a[5])/det,
++            (a[3]*a[7]-a[4]*a[6])/det, (a[1]*a[6]-a[0]*a[7])/det, (a[0]*a[4]-a[1]*a[3])/det)
++    }
++    fun map(x: Double, y: Double): DoubleArray { val w = m[6]*x + m[7]*y + m[8]; return doubleArrayOf((m[0]*x+m[1]*y+m[2])/w, (m[3]*x+m[4]*y+m[5])/w) }
++}
++
++class Bitmap private constructor(val width: Int, val height: Int) {
++    val data = IntArray(width * height)
++    enum class Config { ARGB_8888 }
++    enum class CompressFormat { JPEG, PNG }
++    fun getPixels(px: IntArray, off: Int, stride: Int, x: Int, y: Int, w: Int, h: Int) {
++        for (j in 0 until h) System.arraycopy(data, (y + j) * width + x, px, off + j * stride, w)
++    }
++    fun setPixels(px: IntArray, off: Int, stride: Int, x: Int, y: Int, w: Int, h: Int) {
++        for (j in 0 until h) System.arraycopy(px, off + j * stride, data, (y + j) * width + x, w)
++    }
++    fun eraseColor(c: Int) { data.fill(c) }
++    fun recycle() {}
++    fun copy(cfg: Config, mutable: Boolean): Bitmap { val b = Bitmap(width, height); data.copyInto(b.data); return b }
++    fun compress(f: CompressFormat, q: Int, out: OutputStream): Boolean {
++        val bi = toImage()
++        val w = ImageIO.getImageWritersByFormatName(if (f == CompressFormat.JPEG) "jpeg" else "png").next()
++        val p = w.defaultWriteParam
++        if (f == CompressFormat.JPEG) { p.compressionMode = ImageWriteParam.MODE_EXPLICIT; p.compressionQuality = q / 100f }
++        val ios = MemoryCacheImageOutputStream(out); w.output = ios
++        w.write(null, IIOImage(bi, null, null), p); ios.flush(); ios.close(); w.dispose(); return true
++    }
++    fun toImage(): BufferedImage { val bi = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB); bi.setRGB(0, 0, width, height, data, 0, width); return bi }
++    fun sample(x: Double, y: Double): Int {
++        val fx = x.coerceIn(0.0, width - 1.0); val fy = y.coerceIn(0.0, height - 1.0)
++        val x0 = fx.toInt(); val y0 = fy.toInt(); val x1 = min(x0 + 1, width - 1); val y1 = min(y0 + 1, height - 1)
++        val ax = fx - x0; val ay = fy - y0
++        var out = 0xFF shl 24
++        for (sh in intArrayOf(16, 8, 0)) {
++            val a = (data[y0*width+x0] shr sh) and 255; val b = (data[y0*width+x1] shr sh) and 255
++            val c = (data[y1*width+x0] shr sh) and 255; val d = (data[y1*width+x1] shr sh) and 255
++            val v = (a*(1-ax)+b*ax)*(1-ay) + (c*(1-ax)+d*ax)*ay
++            out = out or (v.roundToInt().coerceIn(0, 255) shl sh)
++        }
++        return out
++    }
++    companion object {
++        fun createBitmap(w: Int, h: Int, c: Config): Bitmap = Bitmap(w, h)
++        fun createBitmap(src: Bitmap, x: Int, y: Int, w: Int, h: Int): Bitmap {
++            val b = Bitmap(w, h); for (j in 0 until h) System.arraycopy(src.data, (y + j) * src.width + x, b.data, j * w, w); return b }
++        fun createBitmap(src: Bitmap, x: Int, y: Int, w: Int, h: Int, m: Matrix, filter: Boolean): Bitmap {
++            var minX = 1e18; var minY = 1e18; var maxX = -1e18; var maxY = -1e18
++            for ((cx, cy) in listOf(x to y, x + w to y, x to y + h, x + w to y + h)) { val p = m.map(cx.toDouble(), cy.toDouble()); minX = min(minX, p[0]); maxX = max(maxX, p[0]); minY = min(minY, p[1]); maxY = max(maxY, p[1]) }
++            val ow = (maxX - minX).roundToInt(); val oh = (maxY - minY).roundToInt()
++            val b = Bitmap(ow, oh); val inv = Matrix().also { it.m = m.invert()!! }
++            for (j in 0 until oh) for (i in 0 until ow) { val p = inv.map(i + minX + 0.5, j + minY + 0.5); b.data[j*ow+i] = src.sample(p[0] - 0.5, p[1] - 0.5) }
++            return b }
++        fun createScaledBitmap(src: Bitmap, w: Int, h: Int, filter: Boolean): Bitmap {
++            val b = Bitmap(w, h); val sx = src.width.toDouble() / w; val sy = src.height.toDouble() / h
++            for (j in 0 until h) for (i in 0 until w) {
++                if (sx > 1.0 || sy > 1.0) {
++                    val x0 = (i * sx).toInt(); val x1 = max(x0 + 1, ((i + 1) * sx).toInt()).coerceAtMost(src.width)
++                    val y0 = (j * sy).toInt(); val y1 = max(y0 + 1, ((j + 1) * sy).toInt()).coerceAtMost(src.height)
++                    var r = 0L; var g = 0L; var bl = 0L; var n = 0
++                    for (yy in y0 until y1) for (xx in x0 until x1) { val p = src.data[yy*src.width+xx]; r += (p shr 16) and 255; g += (p shr 8) and 255; bl += p and 255; n++ }
++                    b.data[j*w+i] = (0xFF shl 24) or ((r/n).toInt() shl 16) or ((g/n).toInt() shl 8) or (bl/n).toInt()
++                } else b.data[j*w+i] = src.sample((i + 0.5) * sx - 0.5, (j + 0.5) * sy - 0.5)
++            }
++            return b }
++        fun fromImage(bi: BufferedImage): Bitmap { val b = Bitmap(bi.width, bi.height); bi.getRGB(0, 0, bi.width, bi.height, b.data, 0, bi.width)
++            for (i in b.data.indices) b.data[i] = b.data[i] or (0xFF shl 24); return b }
++    }
++}
++
++class Canvas(private val bm: Bitmap) {
++    fun drawBitmap(src: Bitmap, m: Matrix, p: Paint?) {
++        val inv = m.invert() ?: return
++        val im = Matrix().also { it.m = inv }
++        for (j in 0 until bm.height) for (i in 0 until bm.width) {
++            val q = im.map(i + 0.5, j + 0.5); val sx = q[0] - 0.5; val sy = q[1] - 0.5
++            if (sx < -0.5 || sy < -0.5 || sx > src.width - 0.5 || sy > src.height - 0.5) continue
++            bm.data[j * bm.width + i] = src.sample(sx, sy)
++        }
++    }
++    fun drawBitmap(src: Bitmap, left: Float, top: Float, p: Paint?) { src.data.copyInto(bm.data) }
++    fun drawBitmap(src: Bitmap, srcRect: Any?, dst: RectF, p: Paint?) {}
++}
++
++object BitmapFactory {
++    class Options { var inJustDecodeBounds = false; var outWidth = 0; var outHeight = 0; var inSampleSize = 1 }
++    fun decodeFile(path: String, o: Options? = null): Bitmap? {
++        val bi = ImageIO.read(File(path)) ?: return null
++        if (o != null && o.inJustDecodeBounds) { o.outWidth = bi.width; o.outHeight = bi.height; return null }
++        val b = Bitmap.fromImage(bi)
++        val s = o?.inSampleSize ?: 1
++        return if (s > 1) Bitmap.createScaledBitmap(b, b.width / s, b.height / s, true) else b
++    }
++}
+diff --git a/tools/jvmtest/stubs/Exif.kt b/tools/jvmtest/stubs/Exif.kt
+new file mode 100644
+index 0000000..91cd062
+--- /dev/null
++++ b/tools/jvmtest/stubs/Exif.kt
+@@ -0,0 +1,10 @@
++package androidx.exifinterface.media
++class ExifInterface(path: String) {
++    fun getAttributeInt(tag: String, def: Int): Int = def
++    companion object {
++        const val TAG_ORIENTATION = "Orientation"
++        const val ORIENTATION_NORMAL = 1; const val ORIENTATION_FLIP_HORIZONTAL = 2; const val ORIENTATION_ROTATE_180 = 3
++        const val ORIENTATION_FLIP_VERTICAL = 4; const val ORIENTATION_TRANSPOSE = 5; const val ORIENTATION_ROTATE_90 = 6
++        const val ORIENTATION_TRANSVERSE = 7; const val ORIENTATION_ROTATE_270 = 8
++    }
++}
+diff --git a/tools/prototype/v2_7/README.txt b/tools/prototype/v2_7/README.txt
+new file mode 100644
+index 0000000..470ffc5
+--- /dev/null
++++ b/tools/prototype/v2_7/README.txt
+@@ -0,0 +1,5 @@
++v2.7.0 reference (Python, same maths as Imaging.kt):
++  straighten()  text-line slope per band -> linear fit -> one homography (rotation + keystone)
++  trim()        non-paper strips (dark OR coloured) along the border
++  magic()       soft continuous colour-preserving filter (tone curve on luminance, boosted chroma faded to 0 on paper)
++Needs: numpy, opencv-python.
+diff --git a/tools/prototype/v2_7/pipe.py b/tools/prototype/v2_7/pipe.py
+new file mode 100644
+index 0000000..5a2612c
+--- /dev/null
++++ b/tools/prototype/v2_7/pipe.py
+@@ -0,0 +1,120 @@
++import numpy as np, cv2, math
++
++def warp(img, quad, out_w, out_h):
++    dst=np.array([[0,0],[out_w,0],[out_w,out_h],[0,out_h]],np.float32)
++    M=cv2.getPerspectiveTransform(np.array(quad,np.float32),dst)
++    return cv2.warpPerspective(img,M,(out_w,out_h),flags=cv2.INTER_CUBIC,borderMode=cv2.BORDER_REPLICATE)
++
++# ---------- geometry refinement: straighten text lines (rotation + keystone) ----------
++def band_angle(gray_band, rng=6.0, step=0.1):
++    # projection-profile skew search on an ink mask
++    h,w=gray_band.shape
++    bg=cv2.GaussianBlur(gray_band,(0,0),25)
++    ink=(gray_band.astype(np.float32)/np.maximum(bg,1)<0.78).astype(np.uint8)
++    ink=cv2.resize(ink,None,fx=0.5,fy=0.5,interpolation=cv2.INTER_AREA)
++    if ink.sum()<200: return None,0
++    hh,ww=ink.shape; c=(ww/2,hh/2)
++    best=None; bs=-1
++    for a in np.arange(-rng,rng+1e-6,step):
++        M=cv2.getRotationMatrix2D(c,a,1.0)
++        r=cv2.warpAffine(ink,M,(ww,hh),flags=cv2.INTER_NEAREST)
++        p=r.sum(1).astype(np.float64)
++        s=np.sum(np.diff(p)**2)
++        if s>bs: bs=s; best=a
++    return best,float(ink.sum())
++
++def straighten(img, nb=6):
++    h,w=img.shape[:2]
++    g=cv2.cvtColor(img,cv2.COLOR_BGR2GRAY)
++    ys=[];angs=[];ws=[]
++    # use central 80% width, overlapping bands over the content area
++    bh=h//nb
++    for i in range(nb):
++        y0=i*bh; y1=min(h,y0+bh+bh//2)
++        a,wt=band_angle(g[y0:y1, int(w*0.1):int(w*0.9)])
++        if a is not None and wt>0:
++            ys.append((y0+y1)/2); angs.append(a); ws.append(wt)
++    if len(ys)<2: return img,None
++    ys=np.array(ys);angs=np.array(angs);ws=np.array(ws)
++    # robust linear fit angle(y)=a0+a1*y (cv2 rotation angle: positive = ccw)
++    for _ in range(3):
++        A=np.vstack([np.ones_like(ys),ys]).T*np.sqrt(ws)[:,None]
++        co,_,_,_=np.linalg.lstsq(A,angs*np.sqrt(ws),rcond=None)
++        res=angs-(co[0]+co[1]*ys)
++        k=np.abs(res)<max(0.6,2*np.median(np.abs(res)))
++        if k.sum()<2: break
++        ys,angs,ws=ys[k],angs[k],ws[k]
++    at=co[0]; ab=co[0]+co[1]*h
++    # a text line that appears rotated by +angle (ccw in cv2 sense) has slope tan(-angle) in image coords (y down)
++    # measured angle = rotation needed to level. Build quad whose edges follow the measured line slopes.
++    tt=math.tan(math.radians(at)); tb=math.tan(math.radians(ab))
++    # source quad: top line and bottom line as seen (slopes tt,tb); verticals kept vertical
++    src=np.array([[0,0],[w,w*tt],[w,h+w*tb],[0,h]],np.float32)
++    # shift so mean maps sensibly
++    src[:,1]-= (src[:,1].mean()-h/2)
++    dst=np.array([[0,0],[w,0],[w,h],[0,h]],np.float32)
++    # rotation correction: use affine-ish via homography
++    M=cv2.getPerspectiveTransform(src,dst)
++    out=cv2.warpPerspective(img,M,(w,h),flags=cv2.INTER_CUBIC,borderMode=cv2.BORDER_REPLICATE)
++    return out,(at,ab,list(zip(ys.round(0),angs.round(2))))
++
++# ---------- trim non-paper strips ----------
++def trim(img, maxfrac=0.08):
++    h,w=img.shape[:2]
++    lab=cv2.cvtColor(cv2.GaussianBlur(img,(0,0),1.5),cv2.COLOR_BGR2LAB).astype(int)
++    L,A=lab[...,0],lab[...,1]
++    Lref=np.percentile(L,70)
++    paper=((L>Lref*0.6)&(abs(A-128)<10))
++    t=b=l=r=0
++    mt=int(h*maxfrac); mw=int(w*maxfrac)
++    while t<mt and paper[t,:].mean()<0.85: t+=1
++    while b<mt and paper[h-1-b,:].mean()<0.85: b+=1
++    while l<mw and paper[:,l].mean()<0.85: l+=1
++    while r<mw and paper[:,w-1-r].mean()<0.85: r+=1
++    pad=3
++    t,b,l,r=[x+pad if x>0 else 0 for x in (t,b,l,r)]
++    return img[t:h-b, l:w-r], (t,b,l,r)
++
++# ---------- illumination ----------
++def paper_map(f, scale=4):
++    # f float32 HxWx3 (0..255). Estimate paper colour per pixel: max-ish filter on downsampled, then smooth
++    h,w=f.shape[:2]
++    s=cv2.resize(f,(max(8,w//scale),max(8,h//scale)),interpolation=cv2.INTER_AREA)
++    k=max(5,int(min(s.shape[:2])*0.06))|1
++    s=cv2.dilate(s,cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(k,k)))   # remove ink
++    s=cv2.erode(s,cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(max(3,k//3)|1,max(3,k//3)|1)))
++    s=cv2.GaussianBlur(s,(0,0),max(2,k/2.5))
++    return cv2.resize(s,(w,h),interpolation=cv2.INTER_CUBIC)
++
++def smoothstep(x): 
++    x=np.clip(x,0,1); return x*x*(3-2*x)
++
++# ---------- new MAGIC: soft, continuous, colour-preserving ----------
++def magic(img, sharp=0.7, chroma_boost=1.35):
++    f=img.astype(np.float32)[...,::-1]          # RGB
++    bgm=np.maximum(paper_map(f),40)
++    # white-balance + flatten: each channel divided by its own paper estimate
++    N=np.clip(f/bgm,0,1.2)
++    # light denoise of chroma only (JPEG chroma noise)
++    ycc=cv2.cvtColor(np.clip(N,0,1).astype(np.float32),cv2.COLOR_RGB2YCrCb)
++    ycc[...,1]=cv2.GaussianBlur(ycc[...,1],(0,0),1.0); ycc[...,2]=cv2.GaussianBlur(ycc[...,2],(0,0),1.0)
++    Y=ycc[...,0]
++    # luminance detail: unsharp with halo clamp
++    blur=cv2.GaussianBlur(Y,(0,0),1.6)
++    Ys=Y+sharp*(Y-blur)
++    lo=cv2.erode(Y,np.ones((3,3),np.uint8)); hi=cv2.dilate(Y,np.ones((3,3),np.uint8))
++    Ys=np.clip(Ys,lo-0.02,hi+0.02)
++    # tone curve on luminance: paper->1, ink deepened (soft S curve, no branching)
++    black,white=0.28,0.90
++    t=np.clip((Ys-black)/(white-black),0,1)
++    Yo=t**1.25
++    Yo=np.where(Ys>=white,1.0,Yo)
++    # chroma carried over (Cr,Cb around .5) scaled by boost, strongest where ink is dark
++    ycc2=np.stack([Yo,0.5+(ycc[...,1]-0.5)*chroma_boost,0.5+(ycc[...,2]-0.5)*chroma_boost],-1).astype(np.float32)
++    rgb=cv2.cvtColor(ycc2,cv2.COLOR_YCrCb2RGB)
++    # fade chroma to zero on paper so background is exactly white, continuously
++    ink=smoothstep((0.93-Ys)/0.25)[...,None]
++    grey=np.repeat(Yo[...,None],3,2)
++    rgb=grey+(rgb-grey)*ink
++    rgb=np.where(Yo[...,None]>0.985,1.0,rgb)
++    return (np.clip(rgb,0,1)*255+0.5).astype(np.uint8)[...,::-1]
+diff --git a/tools/prototype/v2_7/run.py b/tools/prototype/v2_7/run.py
+new file mode 100644
+index 0000000..bba2439
+--- /dev/null
++++ b/tools/prototype/v2_7/run.py
+@@ -0,0 +1,13 @@
++"""Reference for v2.7.0 (Imaging.kt): warp -> straighten -> trim -> soft MAGIC.
++usage: python run.py photo.jpg x0,y0,x1,y1,x2,y2,x3,y3 out.png   (corners TL,TR,BR,BL in pixels)"""
++import sys, math, cv2, pipe
++img = cv2.imread(sys.argv[1])
++q = [float(v) for v in sys.argv[2].split(',')]
++quad = [(q[0], q[1]), (q[2], q[3]), (q[4], q[5]), (q[6], q[7])]
++W = int((math.dist(quad[0], quad[1]) + math.dist(quad[3], quad[2])) / 2)
++H = int((math.dist(quad[0], quad[3]) + math.dist(quad[1], quad[2])) / 2)
++warped = pipe.warp(img, quad, int(W * 1.2), int(H * 1.2))
++straight, info = pipe.straighten(warped)
++print('line angle top/bottom (deg):', info[:2] if info else None)
++trimmed, t = pipe.trim(straight)
++cv2.imwrite(sys.argv[3], pipe.magic(trimmed, sharp=0.7, chroma_boost=2.8))
+-- 
+2.43.0
+
