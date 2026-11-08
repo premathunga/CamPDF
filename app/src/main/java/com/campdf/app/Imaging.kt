@@ -20,7 +20,14 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
-/** Pure-Kotlin image pipeline: no network, no external SDKs. v2.6.5 (on v2.6.4): auto-rotate 0-vs-180 fixed — red + thick-line + top-ink votes. MAGIC halo fix - colour-tinted paper pixels go white, neighbour-aware sharpen. MAGIC color-first + faint-heading-safe, BW red gate 12f -> 8f. */
+/** Pure-Kotlin image pipeline: no network, no external SDKs.
+ * v2.6.6: CamScanner-style clean blue/red ink.
+ * - Stronger colour-halo suppression (grey under blue pen eliminated)
+ * - Wider neighbour-aware ultra-low sharpen on coloured ink
+ * - Looser blue/red detection + higher sat boost for vivid pens
+ * - Paper forced closer to pure white, black text deeper
+ * - Faint Sinhala/Tamil headings still protected
+ */
 object Imaging {
 
     // ---------- loading ----------
@@ -768,7 +775,7 @@ object Imaging {
         }
         val baseSharp = when (mode) {
             FilterMode.BW -> 0.9f
-            FilterMode.MAGIC -> 0.35f // v2.6.3: 0.5 -> 0.35, less halo on coloured ink
+            FilterMode.MAGIC -> 0.28f // v2.6.6: lower base to further reduce grey fringe
             FilterMode.ENHANCE -> 0.6f
             else -> 0.5f
         }
@@ -873,51 +880,54 @@ object Imaging {
                             bb = finalB.toInt().coerceIn(0, 255)
                         }
                         FilterMode.BW -> {
-                            // Detect blue ink as well as red ink and stamps so they don't fade or vanish into white paper
-                            val isBlue = (normB - normR > 4f) && (normB - normG > 2f)
-                            val isRed = (normR - normG > 8f) && (normR - normB > 8f) // v2.6.2: 12f -> 8f, light pink/red stamps stay ink
+                            // v2.6.6: looser blue/red so light ballpoint & stamps stay solid black
+                            val isBlue = (normB - normR > 3f) && (normB - normG > 1.5f)
+                            val isRed  = (normR - normG > 7f) && (normR - normB > 7f)
                             val inkVal = when {
-                                isBlue -> min(normL, normR * 0.70f + normL * 0.30f)
-                                isRed -> min(normL, normG * 0.65f + normB * 0.35f)
-                                else -> normL
+                                isBlue -> min(normL, normR * 0.68f + normL * 0.32f)
+                                isRed  -> min(normL, normG * 0.62f + normB * 0.38f)
+                                else   -> normL
                             }
-                            // 230 is paper level; stroke thresholding preserves faint headings and thin table lines
-                            // 195 +- 35: <=160 -> black, >=230 -> white
-                            val tt = ((inkVal - 160f) / 70f).coerceIn(0f, 1f)
+                            // Soft sigmoid keeps faint headings & thin lines
+                            val tt = ((inkVal - 155f) / 75f).coerceIn(0f, 1f)
                             val v = (255f * tt * tt * (3f - 2f * tt)).toInt()
                             rr = v; gg = v; bb = v
                         }
                         FilterMode.MAGIC -> {
-                            // v2.6.2 CamScanner-inspired Color-Preserving Magic Engine:
-                            // COLOR-FIRST + FAINT-STROKE-SAFE.
-                            // 1) Looser ink gates: light pink / light blue reach ink path.
-                            // 2) satBoost 1.35 -> 2.0 (blue) / 2.6 (red) -> ~64% saturation parity.
-                            // 3) NEVER-BRIGHTEN clamp on ink path (wash-out root cause).
-                            // 4) Paper branch split by stroke: true paper (stroke < 0.04) -> white,
-                            //    faint grey heading (stroke >= 0.04) -> deepened, gain <= 1, never bleached.
+                            // v2.6.6 CamScanner-style Color-Preserving Magic Engine
+                            // Goals: vivid blue/red pens + signatures, zero grey halo under ink,
+                            // pure white paper, deep black printed text, faint headings protected.
                             val maxC = max(normR, max(normG, normB))
                             val minC = min(normR, min(normG, normB))
                             val chroma = maxC - minC
-                            val sat = if (maxC > 10f) chroma / maxC else 0f
-                            val isBlueInk = (normB - normR > 4f) && (normB - normG > 2f) && normB > 90f
-                            val isRedInk = (normR - normG > 10f) && (normR - normB > 10f) && normR > 90f
-                            val isGreenInk = (normG - normR > 8f) && (normG - normB > 8f)
-                            val isColorInk = (sat > 0.07f && chroma > 6f && normL < 235f) || isBlueInk || isRedInk || isGreenInk
+                            val sat = if (maxC > 8f) chroma / maxC else 0f
+
+                            // Looser gates so light ballpoint / faded blue still count as ink
+                            val isBlueInk = (normB - normR > 3f) && (normB - normG > 1.5f) && normB > 70f
+                            val isRedInk  = (normR - normG > 8f) && (normR - normB > 8f) && normR > 80f
+                            val isGreenInk = (normG - normR > 7f) && (normG - normB > 7f)
+                            val isColorInk = (sat > 0.055f && chroma > 5f && normL < 238f) ||
+                                             isBlueInk || isRedInk || isGreenInk
 
                             if (isColorInk) {
-                                // Colored ink / pen / stamps: PRESERVE HUE, boost saturation
+                                // Colored ink / pen / stamps: keep hue, boost saturation, never lighten
                                 val mean = (normR + normG + normB) / 3f
                                 val satBoost = when {
-                                    isRedInk -> 2.6f
-                                    isBlueInk -> 2.0f
-                                    else -> 1.9f
+                                    isRedInk  -> 2.8f
+                                    isBlueInk -> 2.35f
+                                    else      -> 2.0f
                                 }
-                                // Faint writing is darkened so it does not bleach
-                                val inkGain = if (normL > 170f) 0.82f else if (normL > 120f) 0.90f else 0.96f
+                                // Darken faint strokes so they stay readable
+                                val inkGain = when {
+                                    normL > 185f -> 0.78f
+                                    normL > 140f -> 0.88f
+                                    else         -> 0.95f
+                                }
                                 var fR = (mean + (normR - mean) * satBoost) * inkGain
                                 var fG = (mean + (normG - mean) * satBoost) * inkGain
                                 var fB = (mean + (normB - mean) * satBoost) * inkGain
-                                // NEVER-BRIGHTEN: ink may only darken, never lighten
+
+                                // NEVER-BRIGHTEN clamp (critical for clean ink)
                                 val outLum = fR * 0.299f + fG * 0.587f + fB * 0.114f
                                 if (outLum > normL && outLum > 1f) {
                                     val k = normL / outLum
@@ -926,27 +936,31 @@ object Imaging {
                                 rr = fR.toInt().coerceIn(0, 255)
                                 gg = fG.toInt().coerceIn(0, 255)
                                 bb = fB.toInt().coerceIn(0, 255)
-                            } else if (normL > 190f) {
-                                // v2.6.4 HALO FIX: pixels around blue/red ink carry a faint
-                                // colour tint (light-blue halo from pen + JPEG). They are NOT
-                                // faint grey headings. Deepening them makes the grey smudge
-                                // behind blue handwriting in v2.6.3. Faint headings are
-                                // near-grey: sat < 0.04. Anything with colour -> white.
-                                val isColourHalo = sat > 0.04f || (normB - normR > 3f) || (normR - normB > 3f) || (normG - normR > 3f)
-                                val stroke = ((232f - normL) / 232f).coerceIn(0f, 1f)
-                                if (stroke < 0.04f || isColourHalo) {
-                                    // True paper background: smooth into 100% pure spotless white
-                                    val tt = ((normL - 190f) / 45f).coerceIn(0f, 1f)
+                            } else if (normL > 185f) {
+                                // Paper + colour-halo region
+                                // Any residual colour tint from pen bleed / JPEG → pure white
+                                // (this kills the grey under blue handwriting)
+                                val isColourHalo = sat > 0.028f ||
+                                    (normB - normR > 2.0f) || (normR - normB > 2.0f) ||
+                                    (normG - normR > 2.0f) || (normG - normB > 2.0f)
+                                val stroke = ((235f - normL) / 235f).coerceIn(0f, 1f)
+
+                                if (stroke < 0.035f || isColourHalo) {
+                                    // True paper or halo → force toward pure white
+                                    val tt = ((normL - 185f) / 50f).coerceIn(0f, 1f)
                                     val tw = tt * tt * (3f - 2f * tt)
-                                    rr = (normR + (255f - normR) * tw).toInt().coerceIn(0, 255)
-                                    gg = (normG + (255f - normG) * tw).toInt().coerceIn(0, 255)
-                                    bb = (normB + (255f - normB) * tw).toInt().coerceIn(0, 255)
+                                    // Extra push to pure white for residual tint
+                                    val push = if (isColourHalo) 0.92f else 0.78f
+                                    val tw2 = tw * push + (1f - push)
+                                    rr = (normR + (255f - normR) * tw2).toInt().coerceIn(0, 255)
+                                    gg = (normG + (255f - normG) * tw2).toInt().coerceIn(0, 255)
+                                    bb = (normB + (255f - normB) * tw2).toInt().coerceIn(0, 255)
                                 } else {
-                                    // Faint printed heading / thin table line: deepen, gain <= 1
-                                    // Gamma 0.7: faint strokes get deep fast
-                                    val tt2 = ((stroke - 0.04f) / 0.24f).coerceIn(0f, 1f)
+                                    // Faint printed heading / thin table line (near-grey)
+                                    // Deepen carefully, never bleach
+                                    val tt2 = ((stroke - 0.035f) / 0.22f).coerceIn(0f, 1f)
                                     val s = tt2 * tt2 * (3f - 2f * tt2)
-                                    val enhanced = (s.toDouble().pow(0.7)).toFloat() * 0.85f
+                                    val enhanced = (s.toDouble().pow(0.68)).toFloat() * 0.88f
                                     val targetL = (255f * (1f - enhanced)).coerceIn(0f, 255f)
                                     val gain = min(1f, targetL / max(normL, 1f))
                                     rr = (normR * gain).toInt().coerceIn(0, 255)
@@ -954,11 +968,11 @@ object Imaging {
                                     bb = (normB * gain).toInt().coerceIn(0, 255)
                                 }
                             } else {
-                                // Printed black text / Pencil: deepen into solid, sharp jet black
-                                val bp = 90f
-                                val wp = 190f
+                                // Printed black text / pencil → deep solid black
+                                val bp = 85f
+                                val wp = 185f
                                 val tl = ((normL - bp) / (wp - bp)).coerceIn(0f, 1f)
-                                val gl = 255f * tl.pow(1.35f)
+                                val gl = 255f * tl.pow(1.42f)
                                 val gain = min(1f, gl / max(normL, 1f))
                                 rr = (normR * gain).toInt().coerceIn(0, 255)
                                 gg = (normG * gain).toInt().coerceIn(0, 255)
@@ -1010,26 +1024,34 @@ object Imaging {
                     val dn = tm[(j + 1) * w + x]
                     val lf = tm[j * w + max(x - 1, 0)]
                     val rt = tm[j * w + min(x + 1, w - 1)]
-                    // v2.6.3 GREY-HALO FIX: coloured ink (blue/red pen) gets ~0.2x
-                    // sharpen. Full sharpen on a vivid-blue edge bleeds a grey
-                    // fringe 1px below the stroke (the grey under blue handwriting).
-                    // Black text / paper keep full sharpen.
+                    // v2.6.6: ultra-low sharpen on coloured ink + 4-neighbours
+                    // to completely kill grey fringe under blue/red pen strokes.
                     val cr = (c shr 16) and 255
                     val cg = (c shr 8) and 255
                     val cb = c and 255
                     val cmax = max(cr, max(cg, cb))
                     val cmin = min(cr, min(cg, cb))
-                    val cSat = if (cmax > 10) (cmax - cmin).toFloat() / cmax else 0f
-                    // v2.6.4: centre OR any neighbour coloured -> low sharpen.
-                    // Halo pixels are grey themselves, so centre-only check missed them.
+                    val cSat = if (cmax > 8) (cmax - cmin).toFloat() / cmax else 0f
+
                     fun isColouredPx(p: Int): Boolean {
-                        val pr = (p shr 16) and 255; val pg = (p shr 8) and 255; val pb = p and 255
-                        val pmx = max(pr, max(pg, pb)); val pmn = min(pr, min(pg, pb))
-                        return pmx > 10 && (pmx - pmn).toFloat() / pmx > 0.18f && (pmx - pmn) > 25
+                        val pr = (p shr 16) and 255
+                        val pg = (p shr 8) and 255
+                        val pb = p and 255
+                        val pmx = max(pr, max(pg, pb))
+                        val pmn = min(pr, min(pg, pb))
+                        val d = pmx - pmn
+                        // Looser so light-blue halo pixels also suppress sharpen
+                        return pmx > 8 && d > 18 && (d.toFloat() / pmx > 0.12f)
                     }
-                    val isColouredPixel = cSat > 0.18f && (cmax - cmin) > 25 ||
-                        isColouredPx(up) || isColouredPx(dn) || isColouredPx(lf) || isColouredPx(rt)
-                    val amtForPixel = if (isColouredPixel) sharp * 0.2f else sharp
+
+                    val isColouredPixel = (cSat > 0.12f && (cmax - cmin) > 18) ||
+                        isColouredPx(up) || isColouredPx(dn) ||
+                        isColouredPx(lf) || isColouredPx(rt)
+
+                    // 0.10x for coloured / halo neighbourhood (was 0.20)
+                    // Black text and clean paper keep full sharpen
+                    val amtForPixel = if (isColouredPixel) sharp * 0.10f else sharp
+
                     val r2 = sharpenCh(c, up, dn, lf, rt, 16, amtForPixel)
                     val o = (j - 1) * w + x
                     if (mode == FilterMode.BW) {
