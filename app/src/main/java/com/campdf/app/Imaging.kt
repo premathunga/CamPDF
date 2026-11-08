@@ -20,7 +20,7 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
-/** Pure-Kotlin image pipeline: no network, no external SDKs. v2.6.2: MAGIC color-first + faint-heading-safe, BW red gate 12f -> 8f. */
+/** Pure-Kotlin image pipeline: no network, no external SDKs. v2.6.3 (on v2.6.2): MAGIC color-first + faint-heading-safe, BW red gate 12f -> 8f. */
 object Imaging {
 
     // ---------- loading ----------
@@ -88,7 +88,19 @@ object Imaging {
      * based on text stroke directionality and gradient variance.
      * Returns the recommended rotation in quarter turns (0 or 1).
      */
-    fun detectSidewaysOrientation(bm: Bitmap): Int {
+    /**
+     * v2.6.3 AUTO-ROTATE: tries all 4 quarter-turns and picks the one whose
+     * text lines are horizontal.
+     * Score = variance of the row ink-density profile: horizontal text lines
+     * give sharp peaks/valleys (high variance), vertical text gives a flat
+     * profile (low variance). Vertical table borders do NOT fool this,
+     * unlike the old hGrad/vGrad test (which is why v2.6.1/2.6.2 left this
+     * form sideways).
+     * 0 vs 180 tie-break: the side with more ink in its top 20% wins
+     * (forms have a heading / header at the top, footer is sparser).
+     * Returns quarter-turns clockwise to apply: 0, 1, 2 or 3.
+     */
+    fun detectOrientationQuarterTurns(bm: Bitmap): Int {
         val sc = 320f / max(bm.width, bm.height)
         val sw = (bm.width * sc).roundToInt().coerceAtLeast(32)
         val sh = (bm.height * sc).roundToInt().coerceAtLeast(32)
@@ -96,21 +108,56 @@ object Imaging {
         val px = IntArray(sw * sh)
         small.getPixels(px, 0, sw, 0, 0, sw, sh)
         if (small !== bm) small.recycle()
-
-        var hGrad = 0L
-        var vGrad = 0L
-        for (y in 2 until sh - 2) {
-            val row = y * sw
-            for (x in 2 until sw - 2) {
-                val lumL = (px[row + x - 1] and 0xFF)
-                val lumR = (px[row + x + 1] and 0xFF)
-                val lumU = (px[row - sw + x] and 0xFF)
-                val lumD = (px[row + sw + x] and 0xFF)
-                hGrad += abs(lumR - lumL)
-                vGrad += abs(lumD - lumU)
-            }
+        // Dark-pixel mask (ink), ignoring near-white paper
+        val ink = BooleanArray(sw * sh) { i ->
+            val p = px[i]
+            val lum = ((p shr 16) and 255) * 0.299f + ((p shr 8) and 255) * 0.587f + (p and 255) * 0.114f
+            lum < 180f
         }
-        return if (vGrad > hGrad * 1.38f) 1 else 0
+        fun scoreFor(rot: Int): Pair<Float, Float> {
+            // rows after rotation: 0 -> sh rows, 1/3 -> sw rows, 2 -> sh rows
+            val rows = if (rot % 2 == 0) sh else sw
+            val counts = FloatArray(rows)
+            var total = 0f
+            for (y in 0 until sh) for (x in 0 until sw) {
+                if (!ink[y * sw + x]) continue
+                val r = when (rot) {
+                    0 -> y
+                    1 -> x // 90 CW: new row = old x
+                    2 -> sh - 1 - y
+                    else -> sw - 1 - x // 270 CW
+                }
+                counts[r]++; total++
+            }
+            if (total < 50f) return Pair(0f, 0f)
+            val mean = total / rows
+            var varSum = 0f
+            for (c in counts) varSum += (c - mean) * (c - mean)
+            val variance = varSum / rows
+            // top-20% ink share (for 0-vs-180 tie-break)
+            val topN = (rows * 0.20f).toInt().coerceAtLeast(1)
+            var top = 0f
+            for (i in 0 until topN) top += counts[i]
+            return Pair(variance, top / total)
+        }
+        val s0 = scoreFor(0); val s1 = scoreFor(1); val s2 = scoreFor(2); val s3 = scoreFor(3)
+        val horiz = if (s0.first >= s2.first) Pair(0, s0) else Pair(2, s2)
+        val vert = if (s1.first >= s3.first) Pair(1, s1) else Pair(3, s3)
+        // Horizontal must win clearly; if vertical is within 15%, prefer horizontal
+        // (forms are portrait, and vertical borders inflate vertical score slightly)
+        return if (horiz.second.first >= vert.second.first * 0.85f) horiz.first else vert.first
+    }
+
+    /** Back-compat wrapper: 1 = sideways (90 or 270), 0 = upright / upside-down. */
+    fun detectSidewaysOrientation(bm: Bitmap): Int {
+        val q = detectOrientationQuarterTurns(bm)
+        return if (q == 1 || q == 3) 1 else 0
+    }
+
+    /** Rotate a bitmap by quarter-turns clockwise (0..3). No-op for 0. */
+    fun autoRotate(bm: Bitmap): Bitmap {
+        val q = detectOrientationQuarterTurns(bm)
+        return rotate(bm, q)
     }
 
     // ---------- detection / perspective ----------
@@ -690,7 +737,7 @@ object Imaging {
         }
         val baseSharp = when (mode) {
             FilterMode.BW -> 0.9f
-            FilterMode.MAGIC -> 0.5f
+            FilterMode.MAGIC -> 0.35f // v2.6.3: 0.5 -> 0.35, less halo on coloured ink
             FilterMode.ENHANCE -> 0.6f
             else -> 0.5f
         }
@@ -927,15 +974,27 @@ object Imaging {
                     val dn = tm[(j + 1) * w + x]
                     val lf = tm[j * w + max(x - 1, 0)]
                     val rt = tm[j * w + min(x + 1, w - 1)]
-                    val r2 = sharpenCh(c, up, dn, lf, rt, 16, sharp)
+                    // v2.6.3 GREY-HALO FIX: coloured ink (blue/red pen) gets ~0.2x
+                    // sharpen. Full sharpen on a vivid-blue edge bleeds a grey
+                    // fringe 1px below the stroke (the grey under blue handwriting).
+                    // Black text / paper keep full sharpen.
+                    val cr = (c shr 16) and 255
+                    val cg = (c shr 8) and 255
+                    val cb = c and 255
+                    val cmax = max(cr, max(cg, cb))
+                    val cmin = min(cr, min(cg, cb))
+                    val cSat = if (cmax > 10) (cmax - cmin).toFloat() / cmax else 0f
+                    val isColouredPixel = cSat > 0.18f && (cmax - cmin) > 25
+                    val amtForPixel = if (isColouredPixel) sharp * 0.2f else sharp
+                    val r2 = sharpenCh(c, up, dn, lf, rt, 16, amtForPixel)
                     val o = (j - 1) * w + x
                     if (mode == FilterMode.BW) {
                         val t = ((r2 - (bwThreshold - 36f)) / 72f).coerceIn(0f, 1f)
                         val v = (255f * t * t * (3f - 2f * t)).toInt()
                         outBuf[o] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v
                     } else {
-                        val g2 = sharpenCh(c, up, dn, lf, rt, 8, sharp)
-                        val b2 = sharpenCh(c, up, dn, lf, rt, 0, sharp)
+                        val g2 = sharpenCh(c, up, dn, lf, rt, 8, amtForPixel)
+                        val b2 = sharpenCh(c, up, dn, lf, rt, 0, amtForPixel)
                         outBuf[o] = (0xFF shl 24) or (r2 shl 16) or (g2 shl 8) or b2
                     }
                 }
@@ -950,7 +1009,10 @@ object Imaging {
 
     fun pageBitmap(page: PageItem, maxDim: Int, withFilter: Boolean = true): Bitmap? {
         var bm = loadOriented(page.basePath, maxDim) ?: return null
-        bm = rotate(bm, page.rotation)
+        // v2.6.3: if the user has not manually rotated, auto-rotate from
+        // content (text-line projection). Manual rotation always wins,
+        // so pressing Rotate in Review is never undone by auto-rotate.
+        bm = if (page.rotation == 0) autoRotate(bm) else rotate(bm, page.rotation)
         return if (withFilter) applyFilter(bm, page.filter) else bm
     }
 
