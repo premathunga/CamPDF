@@ -58,6 +58,7 @@
     <string name="place_signature">கையொப்பத்தை வைக்கவும்</string>
     <string name="sig_drag_hint">நகர்த்த இழுக்கவும், அளவை மாற்ற ஸ்லைடரை பயன்படுத்தவும்</string>
     <string name="redraw">மீண்டும் வரை</string>
+    <string name="remove_signature">கையொப்பத்தை நீக்கு</string>
     <string name="apply">பயன்படுத்து</string>
     <string name="export_title">PDF ஏற்றுமதி</string>
     <string name="pdf_created">PDF உருவாக்கப்பட்டது</string>

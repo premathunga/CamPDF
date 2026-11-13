@@ -2,6 +2,8 @@ package com.campdf.app.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.view.OrientationEventListener
+import android.view.Surface
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
@@ -144,6 +146,28 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
         onDispose {
             runCatching { future.get().unbindAll() }
         }
+    }
+
+    // v2.8.0: the activity is locked to portrait, so without this every photo taken with the phone held
+    // sideways came out sideways. The orientation sensor tells CameraX how the phone is held; it writes
+    // the matching EXIF orientation and loadOriented() turns the page upright. When the phone lies flat
+    // over the page the sensor reports UNKNOWN and the last known orientation is kept.
+    DisposableEffect(imageCapture) {
+        val ic = imageCapture
+        val listener = object : OrientationEventListener(ctx) {
+            override fun onOrientationChanged(orientation: Int) {
+                if (ic == null || orientation == OrientationEventListener.ORIENTATION_UNKNOWN) return
+                val rot = when (orientation) {
+                    in 45 until 135 -> Surface.ROTATION_270
+                    in 135 until 225 -> Surface.ROTATION_180
+                    in 225 until 315 -> Surface.ROTATION_90
+                    else -> Surface.ROTATION_0
+                }
+                if (ic.targetRotation != rot) ic.targetRotation = rot
+            }
+        }
+        if (ic != null && listener.canDetectOrientation()) listener.enable()
+        onDispose { listener.disable() }
     }
 
     LaunchedEffect(torch, camera) {

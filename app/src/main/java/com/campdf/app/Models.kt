@@ -19,8 +19,12 @@ data class PageItem(
     val corners: List<Float>?,
     val rotation: Int = 0,
     val filter: FilterMode = FilterMode.MAGIC,
-    val rev: Int = 0
+    val rev: Int = 0,
+    val stamps: List<SigStamp> = emptyList()
 )
+
+/** A signature placed on a page: centre (fx, fy) and width fw as fractions of the page; drawn after the filter. */
+data class SigStamp(val sigPath: String, val fx: Float, val fy: Float, val fw: Float)
 
 data class DocItem(
     val file: File,

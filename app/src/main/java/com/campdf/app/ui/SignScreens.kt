@@ -169,7 +169,7 @@ fun SignPlaceScreen(vm: AppViewModel) {
     val page = vm.pages.getOrNull(vm.selected) ?: return
     val c = MaterialTheme.colorScheme
     val density = LocalDensity.current
-    val preview by rememberPageImage(page, 1400, withFilter = false)
+    val preview by rememberPageImage(page, 1400)
     val sig by produceState<ImageBitmap?>(initialValue = null, vm.signatureVersion) {
         value = withContext(Dispatchers.IO) {
             BitmapFactory.decodeFile(vm.repo.signatureFile.absolutePath)?.asImageBitmap()

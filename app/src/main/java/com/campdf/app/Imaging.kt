@@ -90,114 +90,6 @@ object Imaging {
         return r
     }
 
-    /**
-     * Estimates whether the document image is sideways (rotated 90 or 270 degrees)
-     * based on text stroke directionality and gradient variance.
-     * Returns the recommended rotation in quarter turns (0 or 1).
-     */
-    /**
-     * v2.6.3 AUTO-ROTATE: tries all 4 quarter-turns and picks the one whose
-     * text lines are horizontal.
-     * Score = variance of the row ink-density profile: horizontal text lines
-     * give sharp peaks/valleys (high variance), vertical text gives a flat
-     * profile (low variance). Vertical table borders do NOT fool this,
-     * unlike the old hGrad/vGrad test (which is why v2.6.1/2.6.2 left this
-     * form sideways).
-     * 0 vs 180 tie-break: the side with more ink in its top 20% wins
-     * (forms have a heading / header at the top, footer is sparser).
-     * Returns quarter-turns clockwise to apply: 0, 1, 2 or 3.
-     */
-    /**
-     * v2.6.5 AUTO-ROTATE: tries all 4 quarter-turns, picks the one whose
-     * text lines are horizontal. 0-vs-180 is decided by 3 votes, NOT by
-     * top-20% ink alone (v2.6.4 bug: this form's bottom 20% has the heavy
-     * blue signature + date, so flipped page scored MORE top ink and came
-     * out upside-down).
-     * Votes for 0 vs 180 (measured on the unrotated image):
-     *  1. RED ink: red number/stamp is at the TOP of this form (y ~3%).
-     *     If red centroid y > 50%, page is flipped. Weight 3.
-     *  2. THICKEST horizontal line: the thick separator above the
-     *     signature block sits at y ~78% upright. Row with max ink
-     *     count in bottom half -> upright. Weight 2.
-     *  3. Top-20% ink share: weak tie-break only. Weight 1.
-     * Same logic transposed for 90 vs 270. Returns quarter-turns CW: 0..3.
-     */
-    fun detectOrientationQuarterTurns(bm: Bitmap): Int {
-        val sc = 320f / max(bm.width, bm.height)
-        val sw = (bm.width * sc).roundToInt().coerceAtLeast(32)
-        val sh = (bm.height * sc).roundToInt().coerceAtLeast(32)
-        val small = Bitmap.createScaledBitmap(bm, sw, sh, true)
-        val px = IntArray(sw * sh)
-        small.getPixels(px, 0, sw, 0, 0, sw, sh)
-        if (small !== bm) small.recycle()
-        val ink = BooleanArray(sw * sh) { i ->
-            val p = px[i]
-            val lum = ((p shr 16) and 255) * 0.299f + ((p shr 8) and 255) * 0.587f + (p and 255) * 0.114f
-            lum < 180f
-        }
-        fun isRedPx(p: Int): Boolean {
-            val r = (p shr 16) and 255; val g = (p shr 8) and 255; val b = p and 255
-            return (r - g > 10) && (r - b > 10) && r > 90
-        }
-        // Row / column ink counts on unrotated image
-        val rowCnt = FloatArray(sh); val colCnt = FloatArray(sw)
-        var redSumY = 0f; var redCnt = 0f; var redSumX = 0f
-        for (y in 0 until sh) for (x in 0 until sw) {
-            if (ink[y * sw + x]) { rowCnt[y]++; colCnt[x]++ }
-            if (isRedPx(px[y * sw + x])) { redSumY += y; redSumX += x; redCnt++ }
-        }
-        fun variance(counts: FloatArray): Float {
-            val total = counts.sum(); if (total < 50f) return 0f
-            val mean = total / counts.size; var v = 0f
-            for (c in counts) v += (c - mean) * (c - mean)
-            return v / counts.size
-        }
-        // --- 0 vs 180 vote (horizontal text) ---
-        var vote0 = 0f; var vote180 = 0f
-        if (redCnt > 20f) {
-            val redY = redSumY / redCnt / sh
-            if (redY < 0.5f) vote0 += 3f else vote180 += 3f
-        }
-        var maxRow = 0; var maxRowVal = -1f
-        for (y in 0 until sh) if (rowCnt[y] > maxRowVal) { maxRowVal = rowCnt[y]; maxRow = y }
-        if (maxRowVal > 0f) { if (maxRow.toFloat() / sh > 0.5f) vote0 += 2f else vote180 += 2f }
-        var top20 = 0f; var bot20 = 0f
-        for (y in 0 until (sh * 0.20f).toInt()) top20 += rowCnt[y]
-        for (y in (sh * 0.80f).toInt() until sh) bot20 += rowCnt[y]
-        if (top20 > bot20) vote0 += 1f else vote180 += 1f
-        val horizRot = if (vote0 >= vote180) 0 else 2
-        val horizVar = variance(rowCnt)
-        // --- 90 vs 270 vote (vertical text) — same logic transposed ---
-        var vote90 = 0f; var vote270 = 0f
-        if (redCnt > 20f) {
-            val redX = redSumX / redCnt / sw
-            if (redX < 0.5f) vote90 += 3f else vote270 += 3f
-        }
-        var maxCol = 0; var maxColVal = -1f
-        for (x in 0 until sw) if (colCnt[x] > maxColVal) { maxColVal = colCnt[x]; maxCol = x }
-        if (maxColVal > 0f) { if (maxCol.toFloat() / sw > 0.5f) vote90 += 2f else vote270 += 2f }
-        var left20 = 0f; var right20 = 0f
-        for (x in 0 until (sw * 0.20f).toInt()) left20 += colCnt[x]
-        for (x in (sw * 0.80f).toInt() until sw) right20 += colCnt[x]
-        if (left20 > right20) vote90 += 1f else vote270 += 1f
-        val vertRot = if (vote90 >= vote270) 1 else 3
-        val vertVar = variance(colCnt)
-        // Horizontal must win clearly; vertical borders inflate vertical score slightly
-        return if (horizVar >= vertVar * 0.85f) horizRot else vertRot
-    }
-
-    /** Back-compat wrapper: 1 = sideways (90 or 270), 0 = upright / upside-down. */
-    fun detectSidewaysOrientation(bm: Bitmap): Int {
-        val q = detectOrientationQuarterTurns(bm)
-        return if (q == 1 || q == 3) 1 else 0
-    }
-
-    /** Rotate a bitmap by quarter-turns clockwise (0..3). No-op for 0. */
-    fun autoRotate(bm: Bitmap): Bitmap {
-        val q = detectOrientationQuarterTurns(bm)
-        return rotate(bm, q)
-    }
-
     // ---------- detection / perspective ----------
 
     fun detectCorners(path: String): FloatArray = DocDetect.detect(path)
@@ -537,6 +429,7 @@ object Imaging {
     fun applyFilter(src: Bitmap, mode: FilterMode): Bitmap = when (mode) {
         FilterMode.ORIGINAL -> src
         FilterMode.LIGHTEN -> lighten(src)
+        FilterMode.BW -> processBW(src).also { src.recycle() }
         else -> process(src, mode).also { src.recycle() }
     }
 
@@ -621,8 +514,114 @@ object Imaging {
      * Dividing by this 3-channel illumination surface removes phone shadows, color casts,
      * and fold creases cleanly while turning paper into pure neutral white (255, 255, 255).
      */
+    /** Illumination-map resolution (long side) and closing radius; tuned on real photos (tools/jvmtest). */
+    @Volatile var bgDim = 400
+    @Volatile var bgDil = 2
+    @Volatile var bgBlur1 = 3
+    @Volatile var bgBlur2 = 2
+
+    @Volatile var bgMode = 1
+    @Volatile var inkGainMax = 2.4f
+    @Volatile var gainLo = 30f
+    @Volatile var gainSpan = 40f
+
+    /**
+     * v2.9.0 local ink level. Light correction makes the PAPER even, but the INK is not: under a lamp or
+     * in direct light the print is washed out (grey), inside a shadow the camera records it weak too.
+     * Here the typical darkness of the ink around every point is measured (15th percentile of the darkest pixel
+     * per cell, over a 9x9-cell window, on the light-corrected image) and a gain is returned that stretches
+     * that local ink level back to near-black. Places without ink (darkest pixels close to the paper) get no
+     * gain, so paper grain is never amplified. Grid = the paper map grid.
+     */
+    private fun inkGainMap(src: Bitmap, bg: BgMap, paper: FloatArray, paperL: Float): FloatArray {
+        val sw = bg.sw
+        val sh = bg.sh
+        val w2 = sw * 2
+        val h2 = sh * 2
+        var cur = src
+        while (cur.width / 2 >= w2 * 2 && cur.height / 2 >= h2 * 2) {
+            val next = Bitmap.createScaledBitmap(cur, cur.width / 2, cur.height / 2, true)
+            if (cur !== src) cur.recycle()
+            cur = next
+        }
+        val small = Bitmap.createScaledBitmap(cur, w2, h2, true)
+        if (cur !== src && cur !== small) cur.recycle()
+        val px = IntArray(w2 * h2)
+        small.getPixels(px, 0, w2, 0, 0, w2, h2)
+        if (small !== src) small.recycle()
+        val cellMin = FloatArray(sw * sh) { 255f }
+        for (y in 0 until h2) {
+            val by = min(sh - 1, y / 2)
+            for (x in 0 until w2) {
+                val idx = by * sw + min(sw - 1, x / 2)
+                val bL = bg.r[idx] * 0.299f + bg.g[idx] * 0.587f + bg.b[idx] * 0.114f
+                val wt = smooth01((abs(bL / paperL - 1f) - 0.04f) / 0.08f)
+                val e = (paperL + (bL - paperL) * wt).coerceAtLeast(30f)
+                val l = min(255f, luma(px[y * w2 + x]) / e * 255f)
+                if (l < cellMin[idx]) cellMin[idx] = l
+            }
+        }
+        val lvl = boxBlurSeparable(percentile2D(cellMin, sw, sh, 4, 0.15f), sw, sh, 2)
+        // no gain along shadow borders: what is left of a sharp shadow edge after the light correction is a soft
+        // grey line, and stretching it would print the outline of the shadow
+        val bl = FloatArray(sw * sh) { (bg.r[it] * 0.299f + bg.g[it] * 0.587f + bg.b[it] * 0.114f) / paperL }
+        val edge = FloatArray(sw * sh)
+        for (y in 0 until sh) for (x in 0 until sw) {
+            val i = y * sw + x
+            val gx = bl[y * sw + min(sw - 1, x + 2)] - bl[y * sw + max(0, x - 2)]
+            val gy = bl[min(sh - 1, y + 2) * sw + x] - bl[max(0, y - 2) * sw + x]
+            edge[i] = sqrt(gx * gx + gy * gy)
+        }
+        val edgeW = dilateF(edge, sw, sh, 3)
+        return FloatArray(sw * sh) {
+            val contrast = 255f - lvl[it]
+            // faint features (ruled lines, pencil grid, paper grain: contrast < ~60) are left alone; washed-out
+            // print and ink in shadows (contrast ~90-150) is stretched towards black
+            if (contrast < gainLo) 1f else {
+                val g = (215f / contrast).coerceIn(1f, inkGainMax)
+                val keep = 1f - smooth01((edgeW[it] - 0.04f) / 0.08f)
+                1f + (g - 1f) * smooth01((contrast - gainLo) / gainSpan) * keep
+            }
+        }
+    }
+    @Volatile var bgMed = 7
+
+    private fun median2D(a: FloatArray, w: Int, h: Int, r: Int): FloatArray = percentile2D(a, w, h, r, 0.5f)
+
+    /** 2-D percentile over a (2r+1)^2 window, sliding 256-bin histogram (values 0..255). */
+    private fun percentile2D(a: FloatArray, w: Int, h: Int, r: Int, pct: Float): FloatArray {
+        val out = FloatArray(a.size)
+        val q = IntArray(a.size) { a[it].toInt().coerceIn(0, 255) }
+        val hist = IntArray(256)
+        for (y in 0 until h) {
+            java.util.Arrays.fill(hist, 0)
+            val y0 = max(0, y - r)
+            val y1 = min(h - 1, y + r)
+            var cnt = 0
+            for (yy in y0..y1) for (xx in 0..min(w - 1, r)) { hist[q[yy * w + xx]]++; cnt++ }
+            for (x in 0 until w) {
+                if (x > 0) {
+                    val xr = x + r
+                    val xl = x - r - 1
+                    if (xr < w) for (yy in y0..y1) { hist[q[yy * w + xr]]++; cnt++ }
+                    if (xl >= 0) for (yy in y0..y1) { hist[q[yy * w + xl]]--; cnt-- }
+                }
+                var acc = 0
+                val half = max(1, (cnt * pct).roundToInt())
+                var v = 0
+                while (v < 255) {
+                    acc += hist[v]
+                    if (acc >= half) break
+                    v++
+                }
+                out[y * w + x] = v.toFloat()
+            }
+        }
+        return out
+    }
+
     private fun backgroundMap(src: Bitmap): BgMap {
-        val maxDim = 80
+        val maxDim = bgDim
         val longest = max(src.width, src.height)
         val scale = if (longest > maxDim) maxDim.toFloat() / longest else 1f
         val sw = (src.width * scale).roundToInt().coerceAtLeast(16)
@@ -643,16 +642,25 @@ object Imaging {
         var bgG = FloatArray(sw * sh) { ((px[it] shr 8) and 255).toFloat() }
         var bgB = FloatArray(sw * sh) { (px[it] and 255).toFloat() }
 
+        if (bgMode == 1) {
+            // v2.9.0: edge-preserving paper map. A small dilation removes the text strokes, then a 2-D MEDIAN
+            // removes what is left of words / thin bars while keeping SHARP shadow edges sharp (a median keeps a
+            // step, a box blur smears it into a halo: the old map left a ghost of every hand / phone shadow).
+            bgR = boxBlurSeparable(median2D(dilateF(bgR, sw, sh, bgDil), sw, sh, bgMed), sw, sh, 1)
+            bgG = boxBlurSeparable(median2D(dilateF(bgG, sw, sh, bgDil), sw, sh, bgMed), sw, sh, 1)
+            bgB = boxBlurSeparable(median2D(dilateF(bgB, sw, sh, bgDil), sw, sh, bgMed), sw, sh, 1)
+            return BgMap(bgR, bgG, bgB, sw, sh)
+        }
         // Morphological closing + box blur works better than a single coarse blur; it preserves
         // the paper tone while suppressing dark text and folds.
-        bgR = boxBlurSeparable(dilateF(bgR, sw, sh, 4), sw, sh, 3)
-        bgG = boxBlurSeparable(dilateF(bgG, sw, sh, 4), sw, sh, 3)
-        bgB = boxBlurSeparable(dilateF(bgB, sw, sh, 4), sw, sh, 3)
+        bgR = boxBlurSeparable(dilateF(bgR, sw, sh, bgDil), sw, sh, bgBlur1)
+        bgG = boxBlurSeparable(dilateF(bgG, sw, sh, bgDil), sw, sh, bgBlur1)
+        bgB = boxBlurSeparable(dilateF(bgB, sw, sh, bgDil), sw, sh, bgBlur1)
 
         // A second light pass keeps the paper white without making the whole scan too flat.
-        bgR = boxBlurSeparable(bgR, sw, sh, 2)
-        bgG = boxBlurSeparable(bgG, sw, sh, 2)
-        bgB = boxBlurSeparable(bgB, sw, sh, 2)
+        bgR = boxBlurSeparable(bgR, sw, sh, bgBlur2)
+        bgG = boxBlurSeparable(bgG, sw, sh, bgBlur2)
+        bgB = boxBlurSeparable(bgB, sw, sh, bgBlur2)
 
         return BgMap(bgR, bgG, bgB, sw, sh)
     }
@@ -890,6 +898,146 @@ object Imaging {
         return FingerMask(alpha, mw, mh)
     }
 
+
+    // ---------- B&W (v2.8.0) ----------
+
+    @Volatile var bwK = 0.14f
+    @Volatile var bwWin = 22f   // window = short side / bwWin
+
+    /**
+     * v2.8.0 B&W: light correction (the same paper map as the colour filters), then a LOCAL adaptive
+     * threshold (Sauvola: T = m * (1 + k * (s / R - 1)) over a window of ~1/22 of the page), then a soft
+     * 1-2 px edge so strokes are crisp but not jagged.
+     * The old version thresholded every pixel against one global curve, so tinted table cells,
+     * highlighted areas and wrinkled / shaded paper became solid black patches. With a local threshold a
+     * flat tinted area has no local contrast and turns white, while the text inside it stays black.
+     * Coloured pens and stamps: the ink value is pulled towards the darkest channel, so light blue
+     * ballpoint and red seals still come out black.
+     */
+    private fun processBW(src: Bitmap): Bitmap {
+        val w = src.width
+        val h = src.height
+        val bg = backgroundMap(src)
+        val paper = paperLevel(bg)
+        val paperL = (paper[0] * 0.299f + paper[1] * 0.587f + paper[2] * 0.114f).coerceAtLeast(30f)
+        val gain = inkGainMap(src, bg, paper, paperL)
+        val fingers = if (removeFingers) detectFingers(src) else null
+        val sw = bg.sw
+        val sh = bg.sh
+        val x0 = IntArray(w)
+        val fx = FloatArray(w)
+        for (x in 0 until w) {
+            val gx = ((x + 0.5f) * sw / w - 0.5f).coerceIn(0f, sw - 1.001f)
+            x0[x] = gx.toInt()
+            fx[x] = gx - x0[x]
+        }
+        // 1) light-corrected ink value, 0..255 (paper = 255), stored as bytes to keep memory low
+        val v = ByteArray(w * h)
+        val row = IntArray(w)
+        for (y in 0 until h) {
+            src.getPixels(row, 0, w, 0, y, w, 1)
+            val gy = ((y + 0.5f) * sh / h - 0.5f).coerceIn(0f, sh - 1.001f)
+            val y0 = gy.toInt()
+            val fy = gy - y0
+            val rowA = y0 * sw
+            val rowB = (y0 + 1) * sw
+            for (x in 0 until w) {
+                val xi = x0[x]
+                val fxx = fx[x]
+                fun bil(a: FloatArray): Float {
+                    val t = a[rowA + xi] * (1 - fxx) + a[rowA + xi + 1] * fxx
+                    val b = a[rowB + xi] * (1 - fxx) + a[rowB + xi + 1] * fxx
+                    return t * (1 - fy) + b * fy
+                }
+                val bR = bil(bg.r)
+                val bG = bil(bg.g)
+                val bB = bil(bg.b)
+                val bL = bR * 0.299f + bG * 0.587f + bB * 0.114f
+                val wt = smooth01((abs(bL / paperL - 1f) - 0.04f) / 0.08f)
+                val p = row[x]
+                val nr = min(255f, ((p shr 16) and 255) / (paper[0] + (bR - paper[0]) * wt).coerceAtLeast(30f) * 255f)
+                val ng = min(255f, ((p shr 8) and 255) / (paper[1] + (bG - paper[1]) * wt).coerceAtLeast(30f) * 255f)
+                val nb = min(255f, (p and 255) / (paper[2] + (bB - paper[2]) * wt).coerceAtLeast(30f) * 255f)
+                var l = nr * 0.299f + ng * 0.587f + nb * 0.114f
+                var mn = min(nr, min(ng, nb))
+                val sg = bil(gain)
+                if (sg > 1.01f) {
+                    l = (255f - (255f - l) * sg).coerceAtLeast(0f)
+                    mn = (255f - (255f - mn) * sg).coerceAtLeast(0f)
+                }
+                var ink = min(l, 0.6f * l + 0.4f * mn)
+                if (fingers != null) {
+                    val fa = fingers.alphaAt(x, y, w, h)
+                    if (fa > 0.01f) ink += (255f - ink) * fa
+                }
+                v[y * w + x] = ink.toInt().coerceIn(0, 255).toByte()
+            }
+        }
+        // 2) local mean / std on a 1/f grid (box filter), bilinear back to full size
+        val f = max(1, min(w, h) / 600)
+        val gw = (w + f - 1) / f
+        val gh = (h + f - 1) / f
+        val m1 = FloatArray(gw * gh)
+        val m2 = FloatArray(gw * gh)
+        for (gy in 0 until gh) {
+            for (gx in 0 until gw) {
+                var s1 = 0f
+                var s2 = 0f
+                var n = 0
+                for (yy in gy * f until min(h, gy * f + f)) {
+                    for (xx in gx * f until min(w, gx * f + f)) {
+                        val q = (v[yy * w + xx].toInt() and 255).toFloat()
+                        s1 += q
+                        s2 += q * q
+                        n++
+                    }
+                }
+                m1[gy * gw + gx] = s1 / n
+                m2[gy * gw + gx] = s2 / n
+            }
+        }
+        val rad = max(2, ((min(w, h) / bwWin) / (2f * f)).roundToInt())
+        val mean = boxBlurSeparable(m1, gw, gh, rad)
+        val sq = boxBlurSeparable(m2, gw, gh, rad)
+        val dev = FloatArray(gw * gh) { sqrt(max(0f, sq[it] - mean[it] * mean[it])) }
+        // 3) Sauvola threshold with a soft edge
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val gx0 = IntArray(w)
+        val gfx = FloatArray(w)
+        for (x in 0 until w) {
+            val gx = ((x + 0.5f) / f - 0.5f).coerceIn(0f, max(0f, gw - 1.001f))
+            gx0[x] = gx.toInt()
+            gfx[x] = gx - gx0[x]
+        }
+        val k = bwK
+        for (y in 0 until h) {
+            val gy = ((y + 0.5f) / f - 0.5f).coerceIn(0f, max(0f, gh - 1.001f))
+            val ya = gy.toInt()
+            val yb = min(gh - 1, ya + 1)
+            val fy = gy - ya
+            for (x in 0 until w) {
+                val xa = gx0[x]
+                val xb = min(gw - 1, xa + 1)
+                val fxx = gfx[x]
+                val m = (mean[ya * gw + xa] * (1 - fxx) + mean[ya * gw + xb] * fxx) * (1 - fy) +
+                    (mean[yb * gw + xa] * (1 - fxx) + mean[yb * gw + xb] * fxx) * fy
+                val sd = (dev[ya * gw + xa] * (1 - fxx) + dev[ya * gw + xb] * fxx) * (1 - fy) +
+                    (dev[yb * gw + xa] * (1 - fxx) + dev[yb * gw + xb] * fxx) * fy
+                val q = (v[y * w + x].toInt() and 255).toFloat()
+                var t = m * (1f + k * (sd / 128f - 1f))
+                // flat areas (no local contrast): only clearly dark pixels are ink
+                if (sd < 8f) t = min(t, 150f)
+                // never call near-paper pixels ink, always call very dark pixels ink (solid areas)
+                t = t.coerceIn(70f, 235f)
+                val e = ((q - t) / 14f + 0.5f).coerceIn(0f, 1f)
+                val o = (255f * e * e * (3f - 2f * e)).toInt()
+                row[x] = (0xFF shl 24) or (o shl 16) or (o shl 8) or o
+            }
+            out.setPixels(row, 0, w, 0, y, w, 1)
+        }
+        return out
+    }
+
     /**
      * ENHANCE   : auto-levels (contrast stretch) + light sharpening, keeps colour
      * NO_SHADOW : shadow removal by dividing by the estimated paper brightness, whitens the page, keeps colour
@@ -902,6 +1050,10 @@ object Imaging {
         val useBg = true
         // Illumination map for every mode: it also tells how strong the shadows really are.
         val bg: BgMap = backgroundMap(src)
+        val paper0 = paperLevel(bg)
+        val gain = if (mode == FilterMode.MAGIC || mode == FilterMode.NO_SHADOW) inkGainMap(
+            src, bg, paper0, (paper0[0] * 0.299f + paper0[1] * 0.587f + paper0[2] * 0.114f).coerceAtLeast(30f)
+        ) else null
         val paper = paperLevel(bg)
         val paperL = (paper[0] * 0.299f + paper[1] * 0.587f + paper[2] * 0.114f).coerceAtLeast(30f)
         val strength = shadowStrength(bg)
@@ -1001,13 +1153,31 @@ object Imaging {
                         // constant paper level, no halos); from ~12% it is corrected fully; in between it fades in.
                         val bL = bValR * 0.299f + bValG * 0.587f + bValB * 0.114f
                         val wt = smooth01((abs(bL / paperL - 1f) - 0.04f) / 0.08f)
-                        val eR = (paper[0] + (bValR - paper[0]) * wt).coerceAtLeast(30f)
-                        val eG = (paper[1] + (bValG - paper[1]) * wt).coerceAtLeast(30f)
-                        val eB = (paper[2] + (bValB - paper[2]) * wt).coerceAtLeast(30f)
+                        // v2.9.0: shadows and uneven light change brightness but hardly the colour. Where the paper map
+                        // is clearly COLOURED compared with the paper (a tinted table cell, a coloured box), it is
+                        // content: only its brightness is corrected, its colour is kept.
+                        val bLs = bL.coerceAtLeast(30f)
+                        val cDist = max(abs(bValR / bLs - paper[0] / paperL), max(abs(bValG / bLs - paper[1] / paperL), abs(bValB / bLs - paper[2] / paperL)))
+                        val cw = 1f - smooth01((cDist - 0.07f) / 0.08f)
+                        val lEff = (paperL + (bL - paperL) * wt) / paperL
+                        val eR = ((paper[0] + (bValR - paper[0]) * wt) * cw + paper[0] * lEff * (1f - cw)).coerceAtLeast(30f)
+                        val eG = ((paper[1] + (bValG - paper[1]) * wt) * cw + paper[1] * lEff * (1f - cw)).coerceAtLeast(30f)
+                        val eB = ((paper[2] + (bValB - paper[2]) * wt) * cw + paper[2] * lEff * (1f - cw)).coerceAtLeast(30f)
                         normR = min(255f, (r / eR) * 255f)
                         normG = min(255f, (g / eG) * 255f)
                         normB = min(255f, (b / eB) * 255f)
                         lumScale = 255f / (paperL + (bL - paperL) * wt).coerceAtLeast(30f)
+                        // v2.9.0: local ink level (washed-out print, ink inside shadows) stretched back to dark
+                        val sg = if (gain == null) 1f else {
+                            val tg = gain[rowA + xi] * (1 - fxx) + gain[rowA + xi + 1] * fxx
+                            val bg2 = gain[rowB + xi] * (1 - fxx) + gain[rowB + xi + 1] * fxx
+                            tg * (1 - fy) + bg2 * fy
+                        }
+                        if (sg > 1.01f) {
+                            normR = (255f - (255f - normR) * sg).coerceAtLeast(0f)
+                            normG = (255f - (255f - normG) * sg).coerceAtLeast(0f)
+                            normB = (255f - (255f - normB) * sg).coerceAtLeast(0f)
+                        }
                     }
 
                     val normL = normR * 0.299f + normG * 0.587f + normB * 0.114f
@@ -1067,10 +1237,14 @@ object Imaging {
                             val l = normL / 255f
                             val t = ((l - MAGIC_BLACK) / (MAGIC_WHITE - MAGIC_BLACK)).coerceIn(0f, 1f)
                             val lOut = if (l >= MAGIC_WHITE) 1f else t.pow(1.25f)
-                            val k = MAGIC_CHROMA * smooth01((0.93f - l) / 0.25f)
                             val cr = (normR - normL) / 255f
                             val cg = (normG - normL) / 255f
                             val cb = (normB - normL) / 255f
+                            // v2.8.0: chroma dead-zone. A weak colour cast on black print (warm light, cheap
+                            // toner) is not ink colour: below ~4% it is dropped, so printed text is neutral
+                            // black; real pen / stamp colours (usually > 10%) keep the full boost.
+                            val cMag = max(abs(cr), max(abs(cg), abs(cb)))
+                            val k = MAGIC_CHROMA * smooth01((0.93f - l) / 0.25f) * smooth01((cMag - 0.035f) / 0.05f)
                             rr = ((lOut + cr * k) * 255f).toInt().coerceIn(0, 255)
                             gg = ((lOut + cg * k) * 255f).toInt().coerceIn(0, 255)
                             bb = ((lOut + cb * k) * 255f).toInt().coerceIn(0, 255)
@@ -1188,24 +1362,41 @@ object Imaging {
 
     // ---------- pages ----------
 
-    fun pageBitmap(page: PageItem, maxDim: Int, withFilter: Boolean = true): Bitmap? {
+    /**
+     * v2.8.0: the page as it will appear in the PDF. Order: manual rotation -> filter -> signature stamps.
+     * No content-based auto-rotation any more: the v2.6.x detector turned correctly oriented pages
+     * (forms, receipts) sideways or upside-down. Camera captures are now oriented from the phone's
+     * orientation sensor at capture time (CameraScreen), which is reliable.
+     * Stamps are drawn after the filter so B&W / Magic never alter the signature and finger
+     * removal can never whiten it.
+     */
+    fun pageBitmap(page: PageItem, maxDim: Int, withFilter: Boolean = true, withStamps: Boolean = true): Bitmap? {
         var bm = loadOriented(page.basePath, maxDim) ?: return null
-        // v2.6.3: if the user has not manually rotated, auto-rotate from
-        // content (text-line projection). Manual rotation always wins,
-        // so pressing Rotate in Review is never undone by auto-rotate.
-        bm = if (page.rotation == 0) autoRotate(bm) else rotate(bm, page.rotation)
-        return if (withFilter) applyFilter(bm, page.filter) else bm
+        bm = rotate(bm, page.rotation)
+        if (withFilter) bm = applyFilter(bm, page.filter)
+        if (withStamps && page.stamps.isNotEmpty()) {
+            if (!bm.isMutable) {
+                val c = bm.copy(Bitmap.Config.ARGB_8888, true)
+                bm.recycle()
+                bm = c
+            }
+            for (s in page.stamps) {
+                val sig = BitmapFactory.decodeFile(s.sigPath) ?: continue
+                drawStamp(bm, sig, s.fx, s.fy, s.fw)
+                sig.recycle()
+            }
+        }
+        return bm
     }
 
-    fun stamp(base: Bitmap, sig: Bitmap, fx: Float, fy: Float, fw: Float): Bitmap {
-        val out = base.copy(Bitmap.Config.ARGB_8888, true)
+    /** Draws a signature centred at (fx, fy) (fractions of the page), fw = width as a fraction of the page width. */
+    private fun drawStamp(out: Bitmap, sig: Bitmap, fx: Float, fy: Float, fw: Float) {
         val tw = fw * out.width
         val th = tw * sig.height / sig.width
         val cx = fx * out.width
         val cy = fy * out.height
         val dst = RectF(cx - tw / 2, cy - th / 2, cx + tw / 2, cy + th / 2)
-        Canvas(out).drawBitmap(sig, null, dst, Paint(Paint.FILTER_BITMAP_FLAG))
-        return out
+        Canvas(out).drawBitmap(sig, null, dst, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
     }
 
     fun toJpeg(bm: Bitmap, quality: Int): ByteArray {

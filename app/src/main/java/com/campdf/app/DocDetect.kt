@@ -25,6 +25,71 @@ object DocDetect {
     private class Pt(val x: Float, val y: Float)
     private class Cand(val pts: FloatArray, val score: Float, val quad: List<Pt>)
 
+    @Volatile var lastScore = 0f
+    @Volatile var usePageNet = true
+    @Volatile var lastProb: FloatArray? = null
+    @Volatile var lastW = 0
+    @Volatile var lastH = 0
+    @Volatile var FUSE_S = 0.35
+    @Volatile var FUSE_IOU = 5.0
+
+    /** PageNet page probability, resampled to the w x h analysis image (null when the model is unavailable). */
+    private fun pageProb(px: IntArray, w: Int, h: Int): FloatArray? {
+        val n = PageNet.IN
+        val inp = IntArray(n * n)
+        // area-average resize to 256 x 256 (aspect ratio is not kept - the network was trained that way)
+        for (y in 0 until n) {
+            val y0 = y * h / n
+            val y1 = max(y0 + 1, (y + 1) * h / n)
+            for (x in 0 until n) {
+                val x0 = x * w / n
+                val x1 = max(x0 + 1, (x + 1) * w / n)
+                var r = 0; var g = 0; var b = 0; var c = 0
+                for (yy in y0 until min(h, y1)) for (xx in x0 until min(w, x1)) {
+                    val p = px[yy * w + xx]
+                    r += (p shr 16) and 255; g += (p shr 8) and 255; b += p and 255; c++
+                }
+                c = max(1, c)
+                inp[y * n + x] = (0xFF shl 24) or ((r / c) shl 16) or ((g / c) shl 8) or (b / c)
+            }
+        }
+        val o = PageNet.run(inp) ?: return null
+        val m = PageNet.OUT
+        return FloatArray(w * h) {
+            val gx = ((it % w) + 0.5f) * m / w - 0.5f
+            val gy = ((it / w) + 0.5f) * m / h - 0.5f
+            val x0 = gx.toInt().coerceIn(0, m - 1); val y0 = gy.toInt().coerceIn(0, m - 1)
+            val x1 = min(m - 1, x0 + 1); val y1 = min(m - 1, y0 + 1)
+            val fx = (gx - x0).coerceIn(0f, 1f); val fy = (gy - y0).coerceIn(0f, 1f)
+            (o[y0 * m + x0] * (1 - fx) + o[y0 * m + x1] * fx) * (1 - fy) + (o[y1 * m + x0] * (1 - fx) + o[y1 * m + x1] * fx) * fy
+        }
+    }
+
+    /** IoU between a quad and the soft page probability, on a 64 x 64 grid. */
+    private fun softIou(q: List<Pt>, prob: FloatArray, w: Int, h: Int): Float {
+        var inter = 0f
+        var uni = 0f
+        val g = 64
+        for (gy in 0 until g) for (gx in 0 until g) {
+            val x = (gx + 0.5f) * w / g
+            val y = (gy + 0.5f) * h / g
+            var inside = true
+            var sgn = 0
+            for (i in 0 until 4) {
+                val a = q[i]; val b = q[(i + 1) % 4]
+                val c = (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x)
+                val s = if (c >= 0) 1 else -1
+                if (sgn == 0) sgn = s else if (s != sgn) { inside = false; break }
+            }
+            val p = prob[min(h - 1, y.toInt()) * w + min(w - 1, x.toInt())]
+            val qv = if (inside) 1f else 0f
+            inter += min(qv, p)
+            uni += max(qv, p)
+        }
+        return if (uni <= 0f) 0f else inter / uni
+    }
+    private const val MIN_SCORE = 0.22f
+
     private val FALLBACK = floatArrayOf(0.08f, 0.08f, 0.92f, 0.08f, 0.92f, 0.92f, 0.08f, 0.92f)
 
     /** Always returns a quad (inset fallback when detection fails). */
@@ -67,10 +132,183 @@ object DocDetect {
         // white page on a white wall: printed/typed text density marks the page area
         tryMask(inkMask(g, w, h, skin), 0.02f * min(w, h), 0.85f)
 
-        val best = cands.maxByOrNull { it.score } ?: return null
-        if (best.score < 0.20f) return null
-        val snapped = refineQuad(best.quad, mag, w, h)
-        return toNorm(snapped, w, h)
+        // v2.9.0: every candidate (mask-based ones + the straight-line finder) is judged by the same
+        // edge-support score, so the quad whose four sides really sit on page edges wins.
+        val lq = LineQuad(px, w, h)
+        var bestQ: List<Pt>? = null
+        var bestS = 0f
+        for (c in cands) {
+            val s = lq.score(LineQuad.Q(FloatArray(4) { c.quad[it].x }, FloatArray(4) { c.quad[it].y }))
+            if (s > bestS) { bestS = s; bestQ = c.quad }
+        }
+        val ln = lq.detect()
+        if (ln != null && ln.second > bestS) {
+            bestS = ln.second
+            bestQ = List(4) { Pt(ln.first.x[it], ln.first.y[it]) }
+        }
+        // v3.0: the page network says WHERE the page is; among the quads whose sides sit on real edges, the one
+        // that matches the network's page area wins. When no edge quad matches, the network's own outline is used.
+        val prob = if (PageNet.ready && usePageNet) pageProb(px, w, h) else null
+        lastProb = prob; lastW = w; lastH = h
+        // Four strongly supported sides that also agree with the network's page area are trusted as they are
+        // (the network can be too generous on white cloth around a white page).
+        val edgeTrusted = prob != null && bestQ != null && bestS >= 0.90f && softIou(bestQ, prob, w, h) >= 0.60f
+        if (prob != null && !edgeTrusted) {
+            val all = ArrayList<Pair<List<Pt>, Float>>()
+            for (c in cands) all.add(Pair(c.quad, lq.score(LineQuad.Q(FloatArray(4) { c.quad[it].x }, FloatArray(4) { c.quad[it].y }))))
+            for ((q, s) in lq.lastAll) all.add(Pair(List(4) { Pt(q.x[it], q.y[it]) }, s))
+            // straight-sided quads fitted to the network's page outline (the same line finder, run on the
+            // probability map); their sides are snapped onto the real image edges afterwards
+            val pimg = IntArray(total) {
+                val v = (prob[it] * 255f).toInt().coerceIn(0, 255)
+                (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+            }
+            val lqm = LineQuad(pimg, w, h)
+            lqm.detect()
+            for ((q, _) in lqm.lastAll.take(6)) {
+                all.add(Pair(List(4) { Pt(q.x[it], q.y[it]) }, max(0.30f, lq.score(q))))
+            }
+            val netMask = BooleanArray(total) { prob[it] > 0.5f }
+            val netQuad = evaluate(netMask, w, h, mag, 0f)?.quad
+            if (netQuad != null) all.add(Pair(netQuad, max(0.35f, lq.score(LineQuad.Q(FloatArray(4) { netQuad[it].x }, FloatArray(4) { netQuad[it].y })))))
+            var bq: List<Pt>? = null
+            var bs = 0f
+            var bIou = 0f
+            for ((q, s) in all) {
+                val iou = softIou(q, prob, w, h)
+                val f = Math.pow(s.toDouble().coerceAtLeast(0.05), FUSE_S).toFloat() * Math.pow(iou.toDouble(), FUSE_IOU).toFloat()
+                if (f > bs) { bs = f; bq = q; bIou = iou }
+            }
+            if (bq != null && bIou > 0.5f) {
+                bestQ = bq
+                bestS = max(bIou, MIN_SCORE)
+            }
+        }
+        lastScore = bestS
+        val q = bestQ ?: return null
+        if (bestS < MIN_SCORE) return null
+        val snapped = refineQuad(q, mag, w, h)
+        val norm = toNorm(snapped, w, h)
+        return refineHiRes(path, norm) ?: norm
+    }
+
+    /**
+     * v2.9.0: sub-pixel accurate sides. The quad above is found on a 400 px copy, where one pixel is ~8-10 px of a
+     * camera photo. Here every side is re-fitted on a 1600 px copy: along the side the colour step is located
+     * (+-14 px across the side), a robust least-squares line is fitted through those points (outliers - text, hand,
+     * shadow - are dropped in 3 rounds) and the corners are the intersections of the fitted lines.
+     * Returns null when the result is not trustworthy (then the coarse quad is kept).
+     */
+    private fun refineHiRes(path: String, c: FloatArray): FloatArray? {
+        val bm = Imaging.loadOriented(path, 1600) ?: return null
+        val w = bm.width
+        val h = bm.height
+        val px = IntArray(w * h)
+        bm.getPixels(px, 0, w, 0, 0, w, h)
+        bm.recycle()
+        val ch = Array(3) { FloatArray(w * h) }
+        for (i in px.indices) {
+            val p = px[i]
+            val r = ((p shr 16) and 255).toFloat()
+            val g = ((p shr 8) and 255).toFloat()
+            val b = (p and 255).toFloat()
+            ch[0][i] = 0.299f * r + 0.587f * g + 0.114f * b
+            ch[1][i] = r - g
+            ch[2][i] = (r + g) * 0.5f - b
+        }
+        for (k in 0 until 3) ch[k] = gaussBlur(ch[k], w, h)
+        fun at(k: Int, x: Float, y: Float): Float {
+            val xx = x.roundToInt().coerceIn(0, w - 1)
+            val yy = y.roundToInt().coerceIn(0, h - 1)
+            return ch[k][yy * w + xx]
+        }
+        val X = FloatArray(4) { c[2 * it] * w }
+        val Y = FloatArray(4) { c[2 * it + 1] * h }
+        val ox = FloatArray(4)
+        val oy = FloatArray(4)
+        val dxs = FloatArray(4)
+        val dys = FloatArray(4)
+        val range = max(6, (14 * max(w, h) / 1600f).roundToInt())
+        for (s in 0 until 4) {
+            val x0 = X[s]; val y0 = Y[s]; val x1 = X[(s + 1) % 4]; val y1 = Y[(s + 1) % 4]
+            val dx = x1 - x0
+            val dy = y1 - y0
+            val len = hypot(dx, dy)
+            if (len < 20f) return null
+            val nx = -dy / len
+            val ny = dx / len
+            val onBorder = (x0 < 3 && x1 < 3) || (y0 < 3 && y1 < 3) || (x0 > w - 4 && x1 > w - 4) || (y0 > h - 4 && y1 > h - 4)
+            if (onBorder) {
+                ox[s] = x0; oy[s] = y0; dxs[s] = dx; dys[s] = dy
+                continue
+            }
+            val ptsX = ArrayList<Float>()
+            val ptsY = ArrayList<Float>()
+            val wts = ArrayList<Float>()
+            val nS = 80
+            for (i in 0 until nS) {
+                val t = 0.06f + 0.88f * i / (nS - 1)
+                val bx = x0 + dx * t
+                val by = y0 + dy * t
+                var bestO = 0
+                var bestV = 0f
+                for (o in -range..range) {
+                    var v = 0f
+                    for (k in 0 until 3) {
+                        val a = at(k, bx + nx * (o + 2), by + ny * (o + 2)) - at(k, bx + nx * (o - 2), by + ny * (o - 2))
+                        v += a * a
+                    }
+                    if (v > bestV) { bestV = v; bestO = o }
+                }
+                if (bestV < 100f) continue // < ~10 levels: no edge here
+                ptsX.add(bx + nx * bestO)
+                ptsY.add(by + ny * bestO)
+                wts.add(sqrt(bestV))
+            }
+            if (ptsX.size < 12) {
+                ox[s] = x0; oy[s] = y0; dxs[s] = dx; dys[s] = dy
+                continue
+            }
+            // robust total-least-squares line fit
+            var keep = ptsX.indices.toMutableList()
+            var lx = 0f; var ly = 0f; var ldx = dx / len; var ldy = dy / len
+            for (iter in 0 until 3) {
+                var sw = 0.0; var mx = 0.0; var my = 0.0
+                for (i in keep) { val wt = wts[i].toDouble(); sw += wt; mx += wt * ptsX[i]; my += wt * ptsY[i] }
+                mx /= sw; my /= sw
+                var sxx = 0.0; var syy = 0.0; var sxy = 0.0
+                for (i in keep) {
+                    val wt = wts[i].toDouble()
+                    val ax = ptsX[i] - mx; val ay = ptsY[i] - my
+                    sxx += wt * ax * ax; syy += wt * ay * ay; sxy += wt * ax * ay
+                }
+                val ang = 0.5 * kotlin.math.atan2(2 * sxy, sxx - syy)
+                lx = mx.toFloat(); ly = my.toFloat()
+                ldx = kotlin.math.cos(ang).toFloat(); ldy = kotlin.math.sin(ang).toFloat()
+                val res = keep.map { abs((ptsX[it] - lx) * -ldy + (ptsY[it] - ly) * ldx) }
+                val sorted = res.sorted()
+                val lim = max(1.5f, 2.5f * sorted[sorted.size / 2])
+                val nk = keep.filterIndexed { j, _ -> res[j] <= lim }
+                if (nk.size < 10) break
+                keep = nk.toMutableList()
+            }
+            // the fitted direction must stay close to the coarse side
+            if (abs(ldx * (-dy / len) + ldy * (dx / len)) > 0.08f) { ox[s] = x0; oy[s] = y0; dxs[s] = dx; dys[s] = dy; continue }
+            ox[s] = lx; oy[s] = ly; dxs[s] = ldx; dys[s] = ldy
+        }
+        val out = FloatArray(8)
+        for (i in 0 until 4) {
+            val j = (i + 3) % 4
+            val cr = dxs[j] * dys[i] - dys[j] * dxs[i]
+            if (abs(cr) < 1e-4f) return null
+            val t = ((ox[i] - ox[j]) * dys[i] - (oy[i] - oy[j]) * dxs[i]) / cr
+            val px2 = ox[j] + dxs[j] * t
+            val py2 = oy[j] + dys[j] * t
+            if (hypot(px2 - X[i], py2 - Y[i]) > 0.03f * max(w, h)) return null
+            out[2 * i] = (px2 / w).coerceIn(0f, 1f)
+            out[2 * i + 1] = (py2 / h).coerceIn(0f, 1f)
+        }
+        return out
     }
 
     private fun toNorm(q: List<Pt>, w: Int, h: Int): FloatArray {

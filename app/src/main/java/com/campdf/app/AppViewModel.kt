@@ -2,7 +2,6 @@ package com.campdf.app
 
 import android.app.Application
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
@@ -62,6 +61,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     init {
         Imaging.removeFingers = prefs.removeFingers
         refreshDocs()
+        // v3.0: optional page-finding network (assets/pagenet.bin, trained with tools/ml). Without the file the
+        // app works exactly as before (straight-edge detection only).
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { app.assets.open("pagenet.bin").use { PageNet.load(it) } }
+        }
     }
 
     private fun err() = getApplication<Application>().getString(R.string.error_generic)
@@ -233,11 +237,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val result = withContext(Dispatchers.Default) {
                 runCatching {
                     val src = Imaging.loadOriented(raw, 3600) ?: error("load")
-                    var warped = try { Imaging.warp(src, c, 3508) } finally { src.recycle() }
-                    val autoTurns = Imaging.detectSidewaysOrientation(warped)
-                    if (autoTurns > 0) {
-                        warped = Imaging.rotate(warped, autoTurns)
-                    }
+                    val warped = try { Imaging.warp(src, c, 3508) } finally { src.recycle() }
                     val id = idCounter++
                     val f = File(cache, "page_$id.jpg")
                     try { Imaging.saveJpeg(warped, f, 94) } finally { warped.recycle() }
@@ -250,7 +250,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val corners = c.toList()
             if (editIdx != null && editIdx in pages.indices) {
                 val old = pages[editIdx]
-                pages[editIdx] = old.copy(basePath = basePath, corners = corners, rotation = 0, rev = old.rev + 1)
+                pages[editIdx] = old.copy(basePath = basePath, corners = corners, rev = old.rev + 1)
                 cropEditIndex = null
                 screen = Screen.Review
             } else {
@@ -313,29 +313,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * v2.8.0: the signature is kept as a stamp on the page (drawn after the filter), not burnt into the
+     * scan. A private copy of the current signature is used, so redrawing the signature later does not
+     * change pages that were already signed.
+     */
     fun applySignature(fx: Float, fy: Float, fw: Float) {
         val idx = selected
         val page = pages.getOrNull(idx) ?: return
         viewModelScope.launch {
-            busy = true
-            val path = withContext(Dispatchers.Default) {
+            val path = withContext(Dispatchers.IO) {
                 runCatching {
-                    val base = Imaging.pageBitmap(page, 3508, withFilter = false) ?: error("page")
-                    val sig = BitmapFactory.decodeFile(repo.signatureFile.absolutePath) ?: error("sig")
-                    val out = try { Imaging.stamp(base, sig, fx, fy, fw) } finally {
-                        base.recycle()
-                        sig.recycle()
-                    }
-                    val f = File(cache, "page_${idCounter++}.jpg")
-                    try { Imaging.saveJpeg(out, f, 94) } finally { out.recycle() }
+                    val f = File(cache, "page_sig_${idCounter++}.png")
+                    repo.signatureFile.copyTo(f, overwrite = true)
                     f.absolutePath
                 }.getOrNull()
             }
-            busy = false
             if (path == null) { message = err(); return@launch }
-            pages[idx] = page.copy(basePath = path, rotation = 0, rev = page.rev + 1)
+            val cur = pages.getOrNull(idx) ?: page
+            pages[idx] = cur.copy(stamps = cur.stamps + SigStamp(path, fx, fy, fw), rev = cur.rev + 1)
             screen = Screen.Review
         }
+    }
+
+    /** Removes the last signature placed on the selected page. */
+    fun undoSignature() {
+        val i = selected
+        val p = pages.getOrNull(i) ?: return
+        if (p.stamps.isEmpty()) return
+        pages[i] = p.copy(stamps = p.stamps.dropLast(1), rev = p.rev + 1)
     }
 
     // ---------- PDF ----------

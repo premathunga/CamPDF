@@ -59,6 +59,7 @@
     <string name="place_signature">Place signature</string>
     <string name="sig_drag_hint">Drag to move, use the slider to resize</string>
     <string name="redraw">Redraw</string>
+    <string name="remove_signature">Remove sign</string>
     <string name="apply">Apply</string>
     <string name="export_title">PDF Export</string>
     <string name="pdf_created">PDF created</string>

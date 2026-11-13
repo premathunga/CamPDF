@@ -8,3 +8,14 @@
 /captures/
 *.jks
 *.keystore
+
+# private test photos (never commit)
+/tune/
+# ML training artefacts
+/tools/ml/data*/
+/tools/ml/.venv/
+/tools/ml/fonts/
+/tools/ml/*.pt
+/tools/ml/*.bin
+/Claude outputs/
+.write_test

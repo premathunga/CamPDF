@@ -58,6 +58,7 @@
     <string name="place_signature">අත්සන තබන්න</string>
     <string name="sig_drag_hint">ගෙන යාමට ඇදගෙන යන්න, ප්‍රමාණය වෙනස් කිරීමට slider භාවිතා කරන්න</string>
     <string name="redraw">නැවත අඳින්න</string>
+    <string name="remove_signature">අත්සන ඉවත් කරන්න</string>
     <string name="apply">යොදන්න</string>
     <string name="export_title">PDF අපනයනය</string>
     <string name="pdf_created">PDF සාදන ලදි</string>

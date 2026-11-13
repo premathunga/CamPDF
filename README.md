@@ -78,3 +78,66 @@ These are algorithmic improvements, not a claim of parity with CamScanner. Test 
   - Added text line gradient variance detector (`detectSidewaysOrientation`) that automatically detects and straightens 90-degree sideways captures during crop confirmation.
 - **Print-Safe Margins (`PdfWriter.kt`):**
   - Added standard 12 pt safe margins on standardized A4 exports, preventing physical printers from clipping document headers and footers.
+
+## v2.8.0 - correctness fixes + new B&W engine
+Tested on 8 real phone photos (forms, receipt, table, handwritten notes, notepad) with the PC harness in `tools/jvmtest`.
+- **Auto-rotate removed (it was rotating correct pages).** The content-based detector (v2.6.3-v2.6.5) turned an upright
+  tax form upside-down and an upright receipt sideways, and it ran again on every preview/export, so preview, thumbnail and
+  PDF could disagree and the Rotate button behaved unpredictably. Pages are now rotated only by the user.
+- **Camera orientation from the phone's sensor.** The activity is locked to portrait, so photos taken with the phone held
+  sideways came out sideways. `CameraScreen` now sets CameraX's target rotation from `OrientationEventListener`; the
+  EXIF tag makes the page upright. Lying flat over the page keeps the last known orientation.
+- **Signatures are stamps, not pixels.** They are drawn after the filter (B&W / Magic / finger removal can no longer
+  alter or whiten them), each stamp keeps its own copy of the signature, and the last one can be removed
+  ("Remove sign" in Review). The placement screen now shows the filtered page.
+- **New B&W filter (local adaptive threshold).** Light correction, then Sauvola thresholding over a window of ~1/22 of
+  the page with a soft 1-2 px edge. Tinted table cells, highlighted areas and wrinkled/shaded paper no longer turn into
+  black patches; text inside tinted cells stays black; coloured pens/stamps are pulled towards their darkest channel so
+  they stay black.
+- **Finer illumination map** (160 px instead of 80 px, closing radius 5): creases and wrinkle shading on receipts are
+  removed much better in all colour filters.
+- **Magic: neutral black text.** A small colour cast on printed text (warm light, toner) is dropped (chroma dead-zone
+  ~4%), real pen/stamp colours keep the full boost.
+- Known limits (next steps): page detection still fails when the page fills the whole frame or for small documents on
+  a textured table; camera has no live edge overlay / auto-capture yet.
+
+## v2.9.0 - new page detection + shadow / washed-out print handling
+Tuned on 29 real phone photos of Sinhala documents (letters, police forms, receipts, notebook, folded/stained pages,
+hand and phone shadows, white / pink / dark cloth backgrounds) plus 8 English samples. Photos stay in `/tune` (git-ignored).
+- **Page detection rewritten around straight edges (`LineQuad.kt`).** Colour gradient (luminance + two colour axes),
+  thin edges, Hough lines; every pair of horizontal x vertical lines (plus the frame borders) is a candidate quad.
+  A side only counts where the image has a *sharp step* with a consistent sign (printed table lines, folds and soft
+  shadow borders do not), and a side is penalised when the area just beyond it is still the same paper.
+  The old mask-based candidates are re-scored with the same function. The two colour axes weigh 2x more than
+  brightness (white page on cream / white cloth differs mostly in hue; cloth folds are brightness-only) and weaker
+  edges are kept (80th percentile), so low-contrast page borders still become lines. Result on the test set:
+  correct page on ~27/29 Sinhala photos and 8/8 English samples (v2.8: ~14/29 and 6/8); left: a crumpled receipt
+  with a heavy coloured header (t19) and a page held in the hand on white cloth running out of the picture (t01).
+- **Sub-pixel corners.** Each side is re-fitted on a 1600 px copy (colour-step search across the side, robust line fit,
+  corners = intersections). The coarse quad is found on 400 px, where one pixel is ~8-10 px of the photo.
+- **Shadow-proof paper map.** 400 px map, small dilation + 2-D median (edge preserving) instead of box blur, so the
+  sharp edge of a hand / phone shadow no longer leaves a grey ghost.
+- **Local ink level (Magic, No shadow, B&W).** Washed-out print (lamp / direct light) and ink inside shadows is
+  stretched back to near-black from the local ink darkness; faint features (ruled lines, paper grain) and shadow
+  borders get no gain.
+- **Coloured areas keep their colour.** Where the paper map is clearly coloured (tinted cell / box) only its brightness
+  is corrected.
+- B&W threshold k 0.20 -> 0.14 (thin pen strokes in notebooks stay connected).
+- Known limits: a very blurred photo (t12) loses most of its faint pen writing; faded purple stamps next to a shadow
+  border can lose parts in B&W; upside-down captures from the gallery must be rotated by hand.
+
+## v3.0.0 - own page-finding network, PageNet
+- `PageNet.kt`: a tiny U-Net (248k parameters, 0.5 MB float16, `app/src/main/assets/pagenet.bin`) run in plain
+  Kotlin - no ML library, offline, checked against PyTorch (max difference 6e-4). It marks where the page is.
+- `DocDetect` fuses it with the straight-edge finder: a quad with four strongly supported sides that agrees with
+  the network is kept as it is; otherwise the candidates (edge quads + quads fitted to the network's outline) are
+  ranked by edge support x agreement with the network. Corners are still refined to sub-pixel on the photo.
+  Without the asset the app behaves exactly like v2.9.
+- Training (`tools/ml`): 7,000 synthetic documents (Sinhala / Tamil / English) on real background photos
+  (`tune/bg`) and generated cloth / wood / wall / book backgrounds with hands, shadows, folds and blur, plus
+  augmented copies of the 29 labelled `tune` photos (`real_aug.py`).
+- Result: all 29 `tune` photos correct (they were part of the training, so this is not a fair test); on photos
+  the network never saw - 6 new Sinhala photos and the 8 English samples - 14/14 pages found (v2.9 missed one of
+  them). Of the training photos, the white page on white cloth with a hand (t01) and the crumpled receipt with a
+  coloured header (t19) were wrong in v2.9 and are right now.
+- Not measured yet: speed on a phone (about 0.3 s per photo on a 2-core PC).

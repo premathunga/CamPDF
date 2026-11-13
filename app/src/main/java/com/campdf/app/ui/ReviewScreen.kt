@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.AddAPhoto
 import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Crop
@@ -142,6 +143,9 @@ fun ReviewScreen(vm: AppViewModel) {
                 tint = if (filterOpen) c.primary else c.onSurface
             ) { filterOpen = !filterOpen }
             ToolButton(Icons.Rounded.Edit, stringResource(R.string.sign)) { vm.openSign() }
+            if (page != null && page.stamps.isNotEmpty()) {
+                ToolButton(Icons.AutoMirrored.Rounded.Undo, stringResource(R.string.remove_signature)) { vm.undoSignature() }
+            }
             ToolButton(Icons.AutoMirrored.Rounded.ArrowBack, stringResource(R.string.move_left), enabled = sel > 0) { vm.moveSelected(-1) }
             ToolButton(
                 Icons.AutoMirrored.Rounded.ArrowForward,
