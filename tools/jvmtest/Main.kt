@@ -6,6 +6,11 @@ import java.awt.BasicStroke
 
 // usage: in.jpg outPrefix [modes comma] 
 fun main(args: Array<String>) {
+    fun pf(n: String, f: (Float) -> Unit) { System.getProperty(n)?.let { f(it.toFloat()) } }
+    pf("mb") { Imaging.MAGIC_BLACK = it }; pf("mw") { Imaging.MAGIC_WHITE = it }; pf("mc") { Imaging.MAGIC_CHROMA = it }
+    pf("cd") { Imaging.MAGIC_CDARK = it }
+    pf("mr") { Imaging.MAGIC_RED = it }
+    pf("mg") { Imaging.MAGIC_GAMMA = it }; pf("ms") { Imaging.MAGIC_SHARP = it }; pf("gt") { Imaging.GAIN_TARGET = it }
     System.getProperty("model")?.let { println("pagenet " + PageNet.load(java.io.File(it).readBytes())) }
     System.getProperty("bgDim")?.let { Imaging.bgDim = it.toInt() }; System.getProperty("bgDil")?.let { Imaging.bgDil = it.toInt() }
     System.getProperty("bgMode")?.let { Imaging.bgMode = it.toInt() }; System.getProperty("bgMed")?.let { Imaging.bgMed = it.toInt() }
@@ -17,7 +22,7 @@ fun main(args: Array<String>) {
     val t0 = System.currentTimeMillis()
     val c = Imaging.detectCornersOrNull(path)
     val td = System.currentTimeMillis() - t0
-    val corners = c ?: Imaging.detectCorners(path)
+    val corners = System.getProperty("quad")?.split(",")?.map { it.toFloat() }?.toFloatArray() ?: c ?: Imaging.detectCorners(path)
     val src = Imaging.loadOriented(path, 3600)!!
     println("corners ${c?.joinToString { "%.3f".format(it) }} detect=${td}ms src=${src.width}x${src.height}")
     // overlay

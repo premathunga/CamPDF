@@ -141,3 +141,35 @@ hand and phone shadows, white / pink / dark cloth backgrounds) plus 8 English sa
   them). Of the training photos, the white page on white cloth with a hand (t01) and the crumpled receipt with a
   coloured header (t19) were wrong in v2.9 and are right now.
 - Not measured yet: speed on a phone (about 0.3 s per photo on a 2-core PC).
+
+## v3.1.0 - side-by-side with a CamScanner scan of the same photo
+Reference: one 3000x4000 photo of a filled-in form, CamScanner's PDF and CamPDF v3.0's PDF, registered pixel to pixel.
+- **Crop no longer eats the page (`trimBorders`).** The border clean-up treated a shadow lying on the page and
+  handwriting in coloured pen as "background strip": the bottom ~8% of the page and a red reference number at the
+  top were cut off. A strip is now trimmed only when it is clearly dark (< 42% of the paper level) or coloured over
+  at least 45% of the row / column.
+- **Magic tone matched to the reference.** Text was ~35% heavier than in the CamScanner scan (dark-pixel share
+  7.3% vs 5.4%) and small print filled in. New curve (black 0.25, white 0.82, gamma 0.95), gentler local ink gain
+  (target 175), sharpen 0.55: dark-pixel share is now 5.7%. Colour boost 2.8 -> 1.7 (blue pen is navy, not neon).
+- **Pale coloured ink survives.** The tone of a pixel is taken darker in proportion to how coloured it is, so red
+  pen and faded stamps are not washed out with the paper (still fainter than in the CamScanner scan).
+- **Finger removal leaves dark objects alone.** Only skin and dark *warm* blobs at the border are whitened; a
+  dark blue binding thread used to be half erased.
+- **A4 pages.** Scans with a ratio of 1.28-1.56 get an A4 page (was 1.33-1.50).
+
+## v3.2.0 - top sheet of a pile, true A4 output, clean borders
+Same reference photo as v3.1 (a form lying on a pile of papers in a file, phone shadow across the bottom).
+- **Top sheet of a pile.** The page lay on other white sheets shifted a few millimetres; v3.1 took the whole pile, so
+  the result had strips of the lower sheets and of the folder. The generator (`tools/ml/gen.py --stack`) now puts
+  1-4 other sheets under the page in 45% of the samples and labels only the top one; PageNet was retrained on
+  that. `DocDetect` then fits a quad directly to the network's page area (`fitToProb`, corner-by-corner search)
+  when no well-supported edge quad agrees with the network; edge quads that do agree are kept as before.
+- **True A4.** A page whose proportions come out within ~8% of A4 is rendered at exactly 1 : 1.4142 (`snapA4`).
+- **Border clean-up (`cleanBorders`, Magic and B&W).** Blobs that touch the border are erased when they stay
+  inside a 1.5% band, or inside a 7% band when they are a soft colourless smudge / a thin colourless streak
+  (shadow ends, page-edge lines). Text, coloured pen near the edge, stamps and binding thread are not touched.
+- **Red ink.** Red pixels get a stronger tone correction than other colours, so a red reference number stays
+  readable (still thinner than in the CamScanner scan).
+- Checked on the 29 `tune` photos, 6 unseen Sinhala photos and 8 English samples: no page lost compared with
+  v3.1. Known leftovers on the reference photo: a strip of the folder above the top-left corner, a streak from
+  the shadow edge at the bottom, and the crop runs to the bottom of the photo instead of the sheet's own edge.

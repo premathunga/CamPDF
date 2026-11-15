@@ -6,6 +6,7 @@ import java.awt.BasicStroke
 fun main(args: Array<String>) {
     System.getProperty("model")?.let { println("pagenet " + PageNet.load(File(it).readBytes())) }
     System.getProperty("fs")?.let { DocDetect.FUSE_S = it.toDouble() }; System.getProperty("fi")?.let { DocDetect.FUSE_IOU = it.toDouble() }
+    System.getProperty("ti")?.let { DocDetect.TRUST_IOU = it.toFloat() }
     System.getProperty("nonet")?.let { DocDetect.usePageNet = false }
     val outDir = args[0]
     for (path in args.drop(1)) {

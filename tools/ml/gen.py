@@ -180,6 +180,7 @@ def bg_book(h, w):
 
 
 REAL_BG = []
+STACK = 0.0
 
 
 def bg_real(h, w):
@@ -307,10 +308,26 @@ def sample(S):
     M = cv2.getPerspectiveTransform(src, quad)
     warped = cv2.warpPerspective(doc, M, (S, S), flags=cv2.INTER_AREA)
     mask = cv2.warpPerspective(np.full((dh, dw), 255, np.uint8), M, (S, S), flags=cv2.INTER_LINEAR)
+    # a pile of papers / a file: other sheets lie under the page, shifted a little, mostly white. Only the TOP sheet
+    # is the page (label); the sheets below must be treated as background.
+    if STACK > 0 and random.random() < STACK:
+        dirx, diry = rnd(-1, 1), rnd(-1, 1)
+        n = random.randint(1, 4)
+        for k in range(n, 0, -1):
+            shift = np.array([dirx, diry], np.float32) * k * rnd(0.012, 0.035) * S + np.random.uniform(-2, 2, 2)
+            q2 = quad + shift + np.random.uniform(-0.01, 0.01, (4, 2)).astype(np.float32) * S
+            under = make_document(dw, dh).astype(np.float32) if random.random() < 0.3 else \
+                np.full((dh, dw, 3), paper_colour(), np.float32) * rnd(0.92, 1.0)
+            M2 = cv2.getPerspectiveTransform(src, q2.astype(np.float32))
+            w2 = cv2.warpPerspective(under, M2, (S, S), flags=cv2.INTER_AREA)
+            m2 = cv2.warpPerspective(np.full((dh, dw), 255, np.uint8), M2, (S, S), flags=cv2.INTER_LINEAR).astype(np.float32) / 255
+            shd = cv2.GaussianBlur(m2, (0, 0), rnd(0.8, 2.5))
+            bg *= (1 - 0.3 * np.roll(shd, random.randint(1, 3), 0) * rnd(0.3, 1.0))[..., None]
+            bg = bg * (1 - m2[..., None]) + w2 * m2[..., None]
     # paper edge: thin bright rim / slight drop shadow on the background
     a = mask.astype(np.float32)[..., None] / 255
-    if random.random() < 0.6:
-        sh = cv2.GaussianBlur(mask.astype(np.float32) / 255, (0, 0), rnd(1, 4))
+    if random.random() < 0.75:
+        sh = cv2.GaussianBlur(mask.astype(np.float32) / 255, (0, 0), rnd(0.7, 4))
         off = np.roll(np.roll(sh, random.randint(1, 4), 0), random.randint(-3, 3), 1)
         bg *= (1 - 0.35 * off * rnd(0.3, 1.0))[..., None]
     img = bg * (1 - a) + warped * a
@@ -337,8 +354,11 @@ def main():
     ap.add_argument("--size", type=int, default=256)
     ap.add_argument("--bg", default=None)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--stack", type=float, default=0.3, help="share of samples with other sheets under the page")
     ap.add_argument("--start", type=int, default=0, help="first sample index (to run several generators in parallel)")
     a = ap.parse_args()
+    global STACK
+    STACK = a.stack
     random.seed(a.seed)
     np.random.seed(a.seed)
     if a.bg:

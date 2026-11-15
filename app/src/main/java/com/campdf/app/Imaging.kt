@@ -149,6 +149,8 @@ object Imaging {
      * Reject malformed/degenerate input before asking Android's Matrix for a homography; this
      * avoids tiny/zero sized output bitmaps and unstable transforms from accidental corner crossing.
      */
+    @Volatile var snapA4 = true
+
     fun warp(src: Bitmap, corners: FloatArray, maxOut: Int): Bitmap {
         require(maxOut >= 256) { "Output resolution is too small" }
         val fallback = floatArrayOf(0.02f, 0.02f, 0.98f, 0.02f, 0.98f, 0.98f, 0.02f, 0.98f)
@@ -183,6 +185,14 @@ object Imaging {
         if (a != null && a in 0.20..5.0) {
             val hEst = (w / a).toFloat()
             if (hEst in (h * 0.75f)..(h * 1.33f)) h = hEst
+        }
+        // v3.2: office paper is A4. A page whose measured proportions are within ~7% of A4 is rendered at exactly
+        // 1 : 1.4142 (portrait or landscape), so the PDF page is a true A4 sheet instead of a slightly short or
+        // long one caused by a few pixels of corner error. Receipts, cards and other formats are left alone.
+        if (snapA4) {
+            val a4 = 1.41421f
+            val r = h / w
+            if (r in 1.30f..1.53f) h = w * a4 else if (1f / r in 1.30f..1.53f) w = h * a4
         }
         val scale = min(1f, maxOut.toFloat() / max(w, h))
         val ow = (w * scale).roundToInt().coerceAtLeast(1)
@@ -372,7 +382,9 @@ object Imaging {
             if (acc >= cnt * 0.7f) { ref = i; break }
         }
         if (ref < 110) return bm
-        val thr = ref * 0.62f
+        // v3.1: only a clearly dark strip is background. A shadow lying on the page (about half the paper
+        // brightness) is not - trimming it cut the bottom of pages photographed with the phone's shadow on them.
+        val thr = ref * 0.42f
         // v2.7.0: a strip is also background when it is clearly coloured compared with the page (pink folder, cloth)
         fun chromaOf(p: Int): Int {
             val r = (p shr 16) and 255
@@ -390,6 +402,9 @@ object Imaging {
         }
         val chromaLim = (if (chromaCnt > 0) (chromaSum / chromaCnt).toInt() else 0) + 30
         val bad = BooleanArray(px.size) { lum[it] < thr || chromaOf(px[it]) > chromaLim }
+        // v3.1: a leftover background strip fills most of a border row; handwriting in coloured pen near the
+        // edge (a red reference number at the top of a form) covers only part of it and must not be trimmed.
+        val need = 0.45f
         val maxT = max(2, (min(sw, sh) * 0.08f).toInt())
         fun rowFrac(y: Int): Float {
             var n = 0
@@ -402,13 +417,13 @@ object Imaging {
             return n.toFloat() / sh
         }
         var top = 0
-        while (top < maxT && rowFrac(top) > 0.10f) top++
+        while (top < maxT && rowFrac(top) > need) top++
         var bottom = 0
-        while (bottom < maxT && rowFrac(sh - 1 - bottom) > 0.10f) bottom++
+        while (bottom < maxT && rowFrac(sh - 1 - bottom) > need) bottom++
         var left = 0
-        while (left < maxT && colFrac(left) > 0.10f) left++
+        while (left < maxT && colFrac(left) > need) left++
         var right = 0
-        while (right < maxT && colFrac(sw - 1 - right) > 0.10f) right++
+        while (right < maxT && colFrac(sw - 1 - right) > need) right++
         if (top + bottom + left + right == 0) return bm
         if (top > 0) top++
         if (bottom > 0) bottom++
@@ -429,8 +444,121 @@ object Imaging {
     fun applyFilter(src: Bitmap, mode: FilterMode): Bitmap = when (mode) {
         FilterMode.ORIGINAL -> src
         FilterMode.LIGHTEN -> lighten(src)
-        FilterMode.BW -> processBW(src).also { src.recycle() }
+        FilterMode.BW -> cleanBorders(processBW(src).also { src.recycle() })
+        FilterMode.MAGIC -> cleanBorders(process(src, mode).also { src.recycle() })
         else -> process(src, mode).also { src.recycle() }
+    }
+
+    @Volatile var cleanEdges = true
+
+    /**
+     * v3.2: removes the marks a crop leaves along the page border. A non-white blob that touches the border is erased
+     *  - when it lies completely inside a 1.5% band along the border (the dark line of the page edge, a sliver of
+     *    the table or of the sheets underneath), or
+     *  - when it lies inside a 7% band and is a soft, colourless smudge (what is left of a shadow), or a
+     *    colourless streak no deeper than 3.5%.
+     * Anything darker / coloured that reaches further in - text, a pen number near the edge, a stamp, a binding
+     * thread - is left untouched. Works on a ~900 px mask, then whitens the full-size pixels with a soft edge.
+     */
+    private fun cleanBorders(bm: Bitmap): Bitmap {
+        if (!cleanEdges) return bm
+        val w = bm.width
+        val h = bm.height
+        if (w < 300 || h < 300) return bm
+        val f = max(1, min(w, h) / 900)
+        val sw = w / f
+        val sh = h / f
+        val n = sw * sh
+        val minL = ByteArray(n)
+        val chro = BooleanArray(n)
+        val row = IntArray(w)
+        java.util.Arrays.fill(minL, 255.toByte())
+        val st = max(1, f / 2)
+        for (gy in 0 until sh) {
+            var k = 0
+            while (k < f) {
+                bm.getPixels(row, 0, w, 0, min(h - 1, gy * f + k), w, 1)
+                for (gx in 0 until sw) {
+                    var x = gx * f
+                    val xe = min(w, x + f)
+                    val i = gy * sw + gx
+                    var m = minL[i].toInt() and 255
+                    while (x < xe) {
+                        val p = row[x]
+                        val r = (p shr 16) and 255
+                        val g = (p shr 8) and 255
+                        val b = p and 255
+                        val l = (r * 77 + g * 150 + b * 29) shr 8
+                        if (l < m) m = l
+                        if (max(r, max(g, b)) - min(r, min(g, b)) > 40) chro[i] = true
+                        x += st
+                    }
+                    minL[i] = m.toByte()
+                }
+                k += st
+            }
+        }
+        val dark = BooleanArray(n) { (minL[it].toInt() and 255) < 225 }
+        val b1 = max(3, (min(sw, sh) * 0.015f).toInt())
+        val b2 = max(6, (min(sw, sh) * 0.07f).toInt())
+        val seen = BooleanArray(n)
+        val erase = BooleanArray(n)
+        val queue = IntArray(n)
+        var any = false
+        fun flood(s0: Int) {
+            if (!dark[s0] || seen[s0]) return
+            var head = 0
+            var tail = 0
+            queue[tail++] = s0
+            seen[s0] = true
+            var in1 = true
+            var in2 = true
+            var hard = 0
+            var col = 0
+            var maxD = 0
+            while (head < tail) {
+                val i = queue[head++]
+                val x = i % sw
+                val y = i / sw
+                val d = min(min(x, sw - 1 - x), min(y, sh - 1 - y))
+                if (d >= b1) in1 = false
+                if (d >= b2) in2 = false
+                if (d > maxD) maxD = d
+                if (chro[i]) col++
+                if ((minL[i].toInt() and 255) < 110 || chro[i]) hard++
+                if (x > 0) { val q = i - 1; if (dark[q] && !seen[q]) { seen[q] = true; queue[tail++] = q } }
+                if (x < sw - 1) { val q = i + 1; if (dark[q] && !seen[q]) { seen[q] = true; queue[tail++] = q } }
+                if (y > 0) { val q = i - sw; if (dark[q] && !seen[q]) { seen[q] = true; queue[tail++] = q } }
+                if (y < sh - 1) { val q = i + sw; if (dark[q] && !seen[q]) { seen[q] = true; queue[tail++] = q } }
+            }
+            // soft smudge, or a thin colourless streak hugging the border (the edge of a shadow / of the sheet below)
+            val thin = maxD < b2 / 2 && col <= 2
+            if (in1 || (in2 && (hard < tail * 0.05f || thin))) { for (k in 0 until tail) erase[queue[k]] = true; any = true }
+        }
+        for (x in 0 until sw) { flood(x); flood((sh - 1) * sw + x) }
+        for (y in 0 until sh) { flood(y * sw); flood(y * sw + sw - 1) }
+        if (!any) return bm
+        var alpha = FloatArray(n) { if (erase[it]) 1f else 0f }
+        alpha = boxBlurSeparable(dilateF(alpha, sw, sh, 1), sw, sh, 1)
+        val out = if (bm.isMutable) bm else bm.copy(Bitmap.Config.ARGB_8888, true).also { bm.recycle() }
+        for (y in 0 until h) {
+            val gy = min(sh - 1, y / f)
+            var rowHas = false
+            for (gx in 0 until sw) if (alpha[gy * sw + gx] > 0.02f) { rowHas = true; break }
+            if (!rowHas) continue
+            out.getPixels(row, 0, w, 0, y, w, 1)
+            for (x in 0 until w) {
+                val a = (alpha[gy * sw + min(sw - 1, x / f)] * 1.6f).coerceAtMost(1f)
+                if (a <= 0.02f) continue
+                val p = row[x]
+                val r = (p shr 16) and 255
+                val g = (p shr 8) and 255
+                val b = p and 255
+                row[x] = (0xFF shl 24) or ((r + ((255 - r) * a).toInt()) shl 16) or ((g + ((255 - g) * a).toInt()) shl 8) or (b + ((255 - b) * a).toInt())
+            }
+            out.setPixels(row, 0, w, 0, y, w, 1)
+        }
+        return out
     }
 
     private fun lighten(src: Bitmap): Bitmap {
@@ -578,7 +706,7 @@ object Imaging {
             // faint features (ruled lines, pencil grid, paper grain: contrast < ~60) are left alone; washed-out
             // print and ink in shadows (contrast ~90-150) is stretched towards black
             if (contrast < gainLo) 1f else {
-                val g = (215f / contrast).coerceIn(1f, inkGainMax)
+                val g = (GAIN_TARGET / contrast).coerceIn(1f, inkGainMax)
                 val keep = 1f - smooth01((edgeW[it] - 0.04f) / 0.08f)
                 1f + (g - 1f) * smooth01((contrast - gainLo) / gainSpan) * keep
             }
@@ -695,9 +823,14 @@ object Imaging {
     }
 
     // v2.7.0 MAGIC tone curve / colour (tuned in tools/prototype/v2_7)
-    private const val MAGIC_BLACK = 0.28f
-    private const val MAGIC_WHITE = 0.90f
-    private const val MAGIC_CHROMA = 2.8f
+    @Volatile var MAGIC_BLACK = 0.25f
+    @Volatile var MAGIC_WHITE = 0.82f
+    @Volatile var MAGIC_CHROMA = 1.7f
+    @Volatile var MAGIC_CDARK = 1.6f
+    @Volatile var MAGIC_RED = 2.0f
+    @Volatile var MAGIC_GAMMA = 0.95f
+    @Volatile var MAGIC_SHARP = 0.55f
+    @Volatile var GAIN_TARGET = 175f
 
     private val CONTRAST_LUT = FloatArray(256) { i ->
         if (i < 200) (200f * (i / 200f).pow(1.30f)).coerceIn(0f, 255f) else i.toFloat()
@@ -842,7 +975,9 @@ object Imaging {
             val b = p and 255
             val lum = r * 0.299f + g * 0.587f + b * 0.114f
             // Skin tone OR dark edge clamp/thumb obstruction (< 55 brightness)
-            if (isSkin(p) || lum < 55f) {
+            // skin, or a dark warm blob (a thumb in shadow). Dark neutral / bluish things - binding thread, clips,
+            // punch holes - are part of the document and stay (v3.1: half of a thread used to be whitened).
+            if (isSkin(p) || (lum < 55f && r >= b + 6)) {
                 skin[i] = true
                 cnt++
             }
@@ -1091,7 +1226,7 @@ object Imaging {
         }
         val baseSharp = when (mode) {
             FilterMode.BW -> 0.9f
-            FilterMode.MAGIC -> 0.9f // v2.7.0: luminance-only sharpen (see post pass), chroma is never sharpened
+            FilterMode.MAGIC -> MAGIC_SHARP // v2.7.0: luminance-only sharpen (see post pass), chroma is never sharpened
             FilterMode.ENHANCE -> 0.6f
             else -> 0.5f
         }
@@ -1234,12 +1369,20 @@ object Imaging {
                             //  - luminance goes through one smooth tone curve (paper -> 1, ink deepened)
                             //  - colour = the pixel's own chroma (value - luminance), boosted, and faded
                             //    to zero towards paper, so the paper is exactly white and the ink keeps its hue
-                            val l = normL / 255f
-                            val t = ((l - MAGIC_BLACK) / (MAGIC_WHITE - MAGIC_BLACK)).coerceIn(0f, 1f)
-                            val lOut = if (l >= MAGIC_WHITE) 1f else t.pow(1.25f)
+                            val l0 = normL / 255f
                             val cr = (normR - normL) / 255f
                             val cg = (normG - normL) / 255f
                             val cb = (normB - normL) / 255f
+                            // v3.1: coloured ink is light in brightness (a red pen, a faded purple stamp, light blue
+                            // ballpoint) and used to be washed out with the paper. Its tone is now taken darker in
+                            // proportion to how coloured the pixel is, so pale coloured writing survives and blue
+                            // ink comes out as dark as in a real scan.
+                            val cm0 = max(abs(cr), max(abs(cg), abs(cb)))
+                            // red ink (reference numbers, corrections, seals) is the palest of all in brightness
+                            val redW = smooth01((min(normR - normG, normR - normB) / 255f - 0.03f) / 0.05f)
+                            val l = (l0 - (MAGIC_CDARK + MAGIC_RED * redW) * max(0f, cm0 - 0.03f)).coerceAtLeast(0f)
+                            val t = ((l - MAGIC_BLACK) / (MAGIC_WHITE - MAGIC_BLACK)).coerceIn(0f, 1f)
+                            val lOut = if (l >= MAGIC_WHITE) 1f else t.pow(MAGIC_GAMMA)
                             // v2.8.0: chroma dead-zone. A weak colour cast on black print (warm light, cheap
                             // toner) is not ink colour: below ~4% it is dropped, so printed text is neutral
                             // black; real pen / stamp colours (usually > 10%) keep the full boost.

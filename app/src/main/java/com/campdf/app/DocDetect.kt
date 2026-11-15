@@ -30,6 +30,7 @@ object DocDetect {
     @Volatile var lastProb: FloatArray? = null
     @Volatile var lastW = 0
     @Volatile var lastH = 0
+    @Volatile var TRUST_IOU = 0.93f
     @Volatile var FUSE_S = 0.35
     @Volatile var FUSE_IOU = 5.0
 
@@ -63,6 +64,38 @@ object DocDetect {
             val fx = (gx - x0).coerceIn(0f, 1f); val fy = (gy - y0).coerceIn(0f, 1f)
             (o[y0 * m + x0] * (1 - fx) + o[y0 * m + x1] * fx) * (1 - fy) + (o[y1 * m + x0] * (1 - fx) + o[y1 * m + x1] * fx) * fy
         }
+    }
+
+    private fun fitToProb(q0: List<Pt>, prob: FloatArray, w: Int, h: Int): List<Pt> {
+        val x = FloatArray(4) { q0[it].x }
+        val y = FloatArray(4) { q0[it].y }
+        fun quad() = List(4) { Pt(x[it], y[it]) }
+        var best = softIou(quad(), prob, w, h)
+        for (stepF in floatArrayOf(0.04f, 0.02f, 0.01f, 0.005f)) {
+            val sx = stepF * w
+            val sy = stepF * h
+            var improved = true
+            var guard = 0
+            while (improved && guard++ < 12) {
+                improved = false
+                for (i in 0 until 4) {
+                    for (d in 0 until 4) {
+                        val ox = x[i]
+                        val oy = y[i]
+                        when (d) {
+                            0 -> x[i] = (ox + sx).coerceIn(0f, w - 1f)
+                            1 -> x[i] = (ox - sx).coerceIn(0f, w - 1f)
+                            2 -> y[i] = (oy + sy).coerceIn(0f, h - 1f)
+                            else -> y[i] = (oy - sy).coerceIn(0f, h - 1f)
+                        }
+                        val q = quad()
+                        val v = if (anglesOk(q)) softIou(q, prob, w, h) else 0f
+                        if (v > best + 1e-4f) { best = v; improved = true } else { x[i] = ox; y[i] = oy }
+                    }
+                }
+            }
+        }
+        return quad()
     }
 
     /** IoU between a quad and the soft page probability, on a 64 x 64 grid. */
@@ -152,7 +185,8 @@ object DocDetect {
         lastProb = prob; lastW = w; lastH = h
         // Four strongly supported sides that also agree with the network's page area are trusted as they are
         // (the network can be too generous on white cloth around a white page).
-        val edgeTrusted = prob != null && bestQ != null && bestS >= 0.90f && softIou(bestQ, prob, w, h) >= 0.60f
+        val edgeIou = if (prob != null && bestQ != null) softIou(bestQ, prob, w, h) else 0f
+        val edgeTrusted = (bestS >= 0.60f && edgeIou >= TRUST_IOU) || (bestS >= 0.95f && edgeIou >= 0.80f)
         if (prob != null && !edgeTrusted) {
             val all = ArrayList<Pair<List<Pt>, Float>>()
             for (c in cands) all.add(Pair(c.quad, lq.score(LineQuad.Q(FloatArray(4) { c.quad[it].x }, FloatArray(4) { c.quad[it].y }))))
@@ -171,6 +205,16 @@ object DocDetect {
             val netMask = BooleanArray(total) { prob[it] > 0.5f }
             val netQuad = evaluate(netMask, w, h, mag, 0f)?.quad
             if (netQuad != null) all.add(Pair(netQuad, max(0.35f, lq.score(LineQuad.Q(FloatArray(4) { netQuad[it].x }, FloatArray(4) { netQuad[it].y })))))
+            // v3.2: the quad that fits the network's page area best. Start from the best-overlapping candidate and
+            // move the corners one at a time (4% .. 0.5% steps) while the overlap improves. This is what finds the
+            // TOP sheet of a pile of papers, whose edge is only a faint line on white.
+            // Not used when a quad with four well supported sides already agrees with the network reasonably well.
+            val strongEdge = all.any { it.second >= 0.80f && softIou(it.first, prob, w, h) >= 0.85f }
+            val seed = all.maxByOrNull { softIou(it.first, prob, w, h) }?.first
+            if (seed != null && !strongEdge) {
+                val opt = fitToProb(seed, prob, w, h)
+                all.add(Pair(opt, max(0.30f, lq.score(LineQuad.Q(FloatArray(4) { opt[it].x }, FloatArray(4) { opt[it].y })))))
+            }
             var bq: List<Pt>? = null
             var bs = 0f
             var bIou = 0f
