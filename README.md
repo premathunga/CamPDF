@@ -189,3 +189,23 @@ Same reference photo as v3.1 (a form lying on a pile of papers in a file, phone 
   4 filters x 3 photos). On a 2-core PC: Magic 1.3 s -> 0.85 s, B&W 0.8 s -> 0.6 s; phones with 8 cores gain more.
 - Live detection takes ~0.3 s per frame on a 2-core PC (about 3 outline updates per second); phone speed not
   measured yet.
+
+## v3.3.1 - live detection fixes after the first phone test
+Phone test: the live outline was slow and often wrong, auto-capture took very long, and the live-captured photo
+came out smaller (page 1210 px wide instead of ~1900) with colour fringes; a receipt total at the bottom edge was cut.
+- **Fast live detector (`DocDetect.detectLive`).** Only PageNet runs on preview frames; its page map is turned into
+  a quad (largest region -> best 4-gon -> fitted to the map) and the sides are snapped to the frame's edges with
+  one Sobel pass. PC: 77 ms per frame instead of 160 ms; corners within 1.5% (median) of the full detector.
+  The crop screen still runs the full detector on the photo.
+- **PageNet ~2.2x faster** (three kernel taps per pass): 285 ms -> 129 ms per run on the PC, same output (max
+  difference vs PyTorch unchanged, 0.0026).
+- **Auto-capture rewritten (`LiveTracker`).** Measured: detections of a still page wobble by ~2.4% of the frame
+  from frame to frame, more than the old 2.5% max-corner tolerance, so the countdown kept restarting. Now:
+  steadiness on the smoothed outline, average corner movement, 3.5% tolerance, 1.0 s hold; a single far-off
+  frame is ignored. Simulation with real detections of 62 pages, camera noise and hand shake: every page captured
+  after 1.0 s (old tracker: median 1.4 s, slowest 9.1 s, one page never).
+- **Overlay position.** The outline is mapped into the area the FIT_CENTER preview really fills.
+- **Full-resolution photo.** ImageCapture now asks explicitly for the highest 4:3 resolution.
+- **Straightening no longer cuts content.** The post-warp straightening kept the old canvas size, so content
+  pushed past an edge was lost (the "6430" total at the bottom of the receipt). The canvas now grows to hold it.
+- **Border clean-up** also removes slivers of cloth / table that run along a border (long contact, shallow).

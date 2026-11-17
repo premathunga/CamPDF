@@ -60,6 +60,7 @@ class Matrix {
             (a[5]*a[6]-a[3]*a[8])/det, (a[0]*a[8]-a[2]*a[6])/det, (a[2]*a[3]-a[0]*a[5])/det,
             (a[3]*a[7]-a[4]*a[6])/det, (a[1]*a[6]-a[0]*a[7])/det, (a[0]*a[4]-a[1]*a[3])/det)
     }
+    fun mapPoints(p: FloatArray) { for (i in 0 until p.size / 2) { val r = map(p[2*i].toDouble(), p[2*i+1].toDouble()); p[2*i] = r[0].toFloat(); p[2*i+1] = r[1].toFloat() } }
     fun map(x: Double, y: Double): DoubleArray { val w = m[6]*x + m[7]*y + m[8]; return doubleArrayOf((m[0]*x+m[1]*y+m[2])/w, (m[3]*x+m[4]*y+m[5])/w) }
 }
 
@@ -113,7 +114,7 @@ class Bitmap private constructor(val width: Int, val height: Int) {
         fun createScaledBitmap(src: Bitmap, w: Int, h: Int, filter: Boolean): Bitmap {
             val b = Bitmap(w, h); val sx = src.width.toDouble() / w; val sy = src.height.toDouble() / h
             for (j in 0 until h) for (i in 0 until w) {
-                if (sx > 1.0 || sy > 1.0) {
+                if ((sx > 1.0 || sy > 1.0) && !(System.getProperty("bilin") != null && sx <= 2.0 && sy <= 2.0)) {
                     val x0 = (i * sx).toInt(); val x1 = max(x0 + 1, ((i + 1) * sx).toInt()).coerceAtMost(src.width)
                     val y0 = (j * sy).toInt(); val y1 = max(y0 + 1, ((j + 1) * sy).toInt()).coerceAtMost(src.height)
                     var r = 0L; var g = 0L; var bl = 0L; var n = 0

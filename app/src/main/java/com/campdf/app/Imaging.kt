@@ -344,7 +344,21 @@ object Imaging {
         val dst = floatArrayOf(0f, 0f, w.toFloat(), 0f, w.toFloat(), h.toFloat(), 0f, h.toFloat())
         val m = Matrix()
         if (!m.setPolyToPoly(src, 0, dst, 0, 4)) return bm
-        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        // v3.3: the correction moves the page content a little; the output canvas is enlarged to hold ALL of it.
+        // (Before, it kept the old size and anything pushed past an edge was lost - e.g. a total written along the
+        // bottom edge of a receipt came out cut in half.) The extra margin is white and is removed by trimBorders.
+        val corners = floatArrayOf(0f, 0f, w.toFloat(), 0f, w.toFloat(), h.toFloat(), 0f, h.toFloat())
+        m.mapPoints(corners)
+        var minX = 0f; var minY = 0f; var maxX = w.toFloat(); var maxY = h.toFloat()
+        for (i in 0 until 4) {
+            minX = min(minX, corners[2 * i]); maxX = max(maxX, corners[2 * i])
+            minY = min(minY, corners[2 * i + 1]); maxY = max(maxY, corners[2 * i + 1])
+        }
+        val ow = (maxX - minX).roundToInt()
+        val oh = (maxY - minY).roundToInt()
+        if (ow > w * 1.08f || oh > h * 1.08f) return bm
+        m.postTranslate(-minX, -minY)
+        val out = Bitmap.createBitmap(max(1, ow), max(1, oh), Bitmap.Config.ARGB_8888)
         out.eraseColor(android.graphics.Color.WHITE)
         Canvas(out).drawBitmap(bm, m, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
         bm.recycle()
@@ -553,6 +567,7 @@ object Imaging {
             var hard = 0
             var col = 0
             var maxD = 0
+            var contact = 0
             while (head < tail) {
                 val i = queue[head++]
                 val x = i % sw
@@ -561,6 +576,7 @@ object Imaging {
                 if (d >= b1) in1 = false
                 if (d >= b2) in2 = false
                 if (d > maxD) maxD = d
+                if (d == 0) contact++
                 if (chro[i]) col++
                 if ((minL[i].toInt() and 255) < 110 || chro[i]) hard++
                 if (x > 0) { val q = i - 1; if (dark[q] && !seen[q]) { seen[q] = true; queue[tail++] = q } }
@@ -570,7 +586,10 @@ object Imaging {
             }
             // soft smudge, or a thin colourless streak hugging the border (the edge of a shadow / of the sheet below)
             val thin = maxD < b2 / 2 && col <= 2
-            if (in1 || (in2 && (hard < tail * 0.05f || thin))) { for (k in 0 until tail) erase[queue[k]] = true; any = true }
+            // v3.3: a sliver of table / cloth left by the crop: it runs ALONG the border (long contact) and stays
+            // shallow. Ink that touches the edge (a digit, a signature stroke) touches it only briefly.
+            val sliver = maxD < (b2 * 0.6f).toInt() && contact >= min(sw, sh) * 0.10f
+            if (in1 || (in2 && (hard < tail * 0.05f || thin || sliver))) { for (k in 0 until tail) erase[queue[k]] = true; any = true }
         }
         for (x in 0 until sw) { flood(x); flood((sh - 1) * sw + x) }
         for (y in 0 until sh) { flood(y * sw); flood(y * sw + sw - 1) }

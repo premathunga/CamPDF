@@ -137,6 +137,7 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
     // v3.3 live page detection: the outline of the page found in the preview, and how long it has been steady
     val liveOn = vm.autoDetect
     var liveQuad by remember { mutableStateOf<FloatArray?>(null) }
+    var frameAspect by remember { mutableStateOf(3f / 4f) } // width / height of the upright analysis frame
     var steady by remember { mutableStateOf(0f) }
     val tracker = remember { LiveTracker() }
     val paused = remember { AtomicBoolean(false) }
@@ -149,8 +150,17 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
             try {
                 val provider = future.get()
                 val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
+                // v3.3.1: ask explicitly for the camera's full 4:3 resolution. With the live-detection stream bound as
+                // well, some phones otherwise handed back a much smaller photo (first test: page 1210 px wide instead
+                // of ~1900 px, with colour fringes around the ink).
                 val capture = ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                    .setResolutionSelector(
+                        ResolutionSelector.Builder()
+                            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                            .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                            .build()
+                    )
                     .build()
                 // small 4:3 frames (same field of view as the 4:3 preview and photo) for the page detector
                 val analysis = if (!liveOn) null else ImageAnalysis.Builder()
@@ -171,16 +181,19 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
                                 if (!paused.get()) {
                                     val frame = proxy.toBitmap()
                                     val rot = proxy.imageInfo.rotationDegrees
-                                    val s = 400f / maxOf(frame.width, frame.height)
+                                    val s = 320f / maxOf(frame.width, frame.height)
                                     val m = Matrix().apply { postScale(s, s); postRotate(rot.toFloat()) }
                                     val upright = Bitmap.createBitmap(frame, 0, 0, frame.width, frame.height, m, true)
                                     if (upright !== frame) frame.recycle()
-                                    val q = runCatching { DocDetect.detectBitmap(upright) }.getOrNull()
+                                    val aspect = upright.width.toFloat() / upright.height
+                                    // v3.3.1: fast network-only detection (~3x cheaper than the full detector)
+                                    val q = runCatching { DocDetect.detectLive(upright) }.getOrNull()
                                     upright.recycle()
                                     val st = tracker.update(q, SystemClock.elapsedRealtime())
                                     main.execute {
                                         liveQuad = st.quad
                                         steady = st.progress
+                                        frameAspect = aspect
                                     }
                                 }
                             } catch (_: Throwable) {
@@ -316,8 +329,15 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
             val primary = c.primary
             Canvas(Modifier.fillMaxSize()) {
                 if (q != null) {
-                    // the page found in the live preview; it turns green while it is held steady
-                    val p = List(4) { Offset(q[2 * it] * size.width, q[2 * it + 1] * size.height) }
+                    // the page found in the live preview; it turns green while it is held steady.
+                    // The preview is drawn FIT_CENTER: map frame coordinates into the area the picture really fills.
+                    val boxAspect = size.width / size.height
+                    val pw: Float
+                    val ph: Float
+                    if (frameAspect > boxAspect) { pw = size.width; ph = size.width / frameAspect } else { ph = size.height; pw = size.height * frameAspect }
+                    val ox = (size.width - pw) / 2f
+                    val oy = (size.height - ph) / 2f
+                    val p = List(4) { Offset(ox + q[2 * it] * pw, oy + q[2 * it + 1] * ph) }
                     val path = Path().apply {
                         moveTo(p[0].x, p[0].y); lineTo(p[1].x, p[1].y); lineTo(p[2].x, p[2].y); lineTo(p[3].x, p[3].y); close()
                     }

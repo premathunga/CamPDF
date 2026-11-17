@@ -91,26 +91,45 @@ object PageNet {
                 while (co < L.cout) {
                     val ob = co * plane
                     java.util.Arrays.fill(out, ob, ob + plane, L.b[co])
+                    // v3.3: the three taps of a kernel row are applied in one pass over the input row
+                    // (about 3x fewer loop iterations than one tap at a time; same arithmetic per output).
                     for (ci in 0 until L.cin) {
                         val ib = ci * h * w
                         val wb = (co * L.cin + ci) * 9
                         for (ky in 0 until 3) {
-                            for (kx in 0 until 3) {
-                                val k = L.w[wb + ky * 3 + kx]
-                                if (k == 0f) continue
-                                for (oy in 0 until oh) {
-                                    val iy = oy * s + ky - 1
-                                    if (iy < 0 || iy >= h) continue
-                                    val irow = ib + iy * w
-                                    val orow = ob + oy * ow
-                                    var ox = if (kx == 0) 1 else 0 // ix = ox*s + kx - 1 must be >= 0
-                                    if (kx == 0 && s == 2) ox = 1
-                                    while (ox < ow) {
-                                        val ix = ox * s + kx - 1
-                                        if (ix >= w) break
-                                        out[orow + ox] += k * x[irow + ix]
+                            val w0 = L.w[wb + ky * 3]
+                            val w1 = L.w[wb + ky * 3 + 1]
+                            val w2 = L.w[wb + ky * 3 + 2]
+                            for (oy in 0 until oh) {
+                                val iy = oy * s + ky - 1
+                                if (iy < 0 || iy >= h) continue
+                                val irow = ib + iy * w
+                                val orow = ob + oy * ow
+                                // ox = 0: input columns -1 (padding), 0, 1
+                                out[orow] += w1 * x[irow] + (if (w > 1) w2 * x[irow + 1] else 0f)
+                                var ox = 1
+                                if (s == 1) {
+                                    val last = ow - 1
+                                    while (ox < last) {
+                                        val ix = irow + ox
+                                        out[orow + ox] += w0 * x[ix - 1] + w1 * x[ix] + w2 * x[ix + 1]
                                         ox++
                                     }
+                                } else {
+                                    while (ox < ow && 2 * ox + 1 < w) {
+                                        val ix = irow + 2 * ox
+                                        out[orow + ox] += w0 * x[ix - 1] + w1 * x[ix] + w2 * x[ix + 1]
+                                        ox++
+                                    }
+                                }
+                                // remaining columns at the right edge (input column w = padding)
+                                while (ox < ow) {
+                                    val c = ox * s
+                                    var v = w0 * x[irow + c - 1]
+                                    if (c < w) v += w1 * x[irow + c]
+                                    if (c + 1 < w) v += w2 * x[irow + c + 1]
+                                    out[orow + ox] += v
+                                    ox++
                                 }
                             }
                         }
