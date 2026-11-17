@@ -30,6 +30,10 @@
     <string name="camera_perm">ලේඛන ස්කෑන් කිරීමට කැමරා අවසරය අවශ්‍යයි.</string>
     <string name="grant">අවසරය දෙන්න</string>
     <string name="camera_hint">ලේඛනය රාමුව තුළ තබන්න</string>
+    <string name="hint_searching">පිටුව සොයමින්…</string>
+    <string name="hint_hold_steady">පිටුව හමු විය – නොසෙල්වී අල්ලන්න</string>
+    <string name="hint_capturing">ඡායාරූපය ගනිමින්…</string>
+    <string name="hint_page_found">පිටුව හමු විය – ගන්න ඔබන්න</string>
     <string name="crop_title">දාර සකසන්න</string>
     <string name="auto">ස්වයං</string>
     <string name="full_page">සම්පූර්ණ</string>

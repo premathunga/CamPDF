@@ -439,6 +439,41 @@ object Imaging {
         return out
     }
 
+    // ---------- multi-core ----------
+
+    /** Worker threads for the filters (v3.3). 0 = one per CPU core (at most 8). 1 = old single-thread behaviour. */
+    @Volatile var threads = 0
+
+    private val nCores: Int get() = if (threads > 0) threads else Runtime.getRuntime().availableProcessors().coerceIn(1, 8)
+
+    private val pool: java.util.concurrent.ExecutorService by lazy {
+        java.util.concurrent.Executors.newFixedThreadPool(8) { r -> Thread(r, "CamPDF-filter").apply { isDaemon = true } }
+    }
+
+    /** Runs [worker] on nCores threads at once and waits for all of them; the first exception is re-thrown. */
+    private fun runParallel(worker: () -> Unit) {
+        val n = nCores
+        if (n <= 1) { worker(); return }
+        val futures = (0 until n).map { pool.submit(java.util.concurrent.Callable { worker() }) }
+        var err: Throwable? = null
+        for (f in futures) {
+            try { f.get() } catch (e: java.util.concurrent.ExecutionException) { if (err == null) err = e.cause ?: e }
+        }
+        err?.let { throw it }
+    }
+
+    /** Splits 0 until total into chunks and runs body(from, until) for each chunk in parallel. */
+    private fun parallelRange(total: Int, chunk: Int, body: (Int, Int) -> Unit) {
+        val next = java.util.concurrent.atomic.AtomicInteger(0)
+        runParallel {
+            while (true) {
+                val a = next.getAndAdd(chunk)
+                if (a >= total) break
+                body(a, min(total, a + chunk))
+            }
+        }
+    }
+
     // ---------- filters ----------
 
     fun applyFilter(src: Bitmap, mode: FilterMode): Bitmap = when (mode) {
@@ -471,10 +506,11 @@ object Imaging {
         val n = sw * sh
         val minL = ByteArray(n)
         val chro = BooleanArray(n)
-        val row = IntArray(w)
         java.util.Arrays.fill(minL, 255.toByte())
         val st = max(1, f / 2)
-        for (gy in 0 until sh) {
+        parallelRange(sh, 32) { gFrom, gTo ->
+          val row = IntArray(w)
+          for (gy in gFrom until gTo) {
             var k = 0
             while (k < f) {
                 bm.getPixels(row, 0, w, 0, min(h - 1, gy * f + k), w, 1)
@@ -497,6 +533,7 @@ object Imaging {
                 }
                 k += st
             }
+          }
         }
         val dark = BooleanArray(n) { (minL[it].toInt() and 255) < 225 }
         val b1 = max(3, (min(sw, sh) * 0.015f).toInt())
@@ -541,7 +578,9 @@ object Imaging {
         var alpha = FloatArray(n) { if (erase[it]) 1f else 0f }
         alpha = boxBlurSeparable(dilateF(alpha, sw, sh, 1), sw, sh, 1)
         val out = if (bm.isMutable) bm else bm.copy(Bitmap.Config.ARGB_8888, true).also { bm.recycle() }
-        for (y in 0 until h) {
+        parallelRange(h, 64) { yFrom, yTo ->
+          val row = IntArray(w)
+          for (y in yFrom until yTo) {
             val gy = min(sh - 1, y / f)
             var rowHas = false
             for (gx in 0 until sw) if (alpha[gy * sw + gx] > 0.02f) { rowHas = true; break }
@@ -557,6 +596,7 @@ object Imaging {
                 row[x] = (0xFF shl 24) or ((r + ((255 - r) * a).toInt()) shl 16) or ((g + ((255 - g) * a).toInt()) shl 8) or (b + ((255 - b) * a).toInt())
             }
             out.setPixels(row, 0, w, 0, y, w, 1)
+          }
         }
         return out
     }
@@ -1068,8 +1108,9 @@ object Imaging {
         }
         // 1) light-corrected ink value, 0..255 (paper = 255), stored as bytes to keep memory low
         val v = ByteArray(w * h)
-        val row = IntArray(w)
-        for (y in 0 until h) {
+        parallelRange(h, 64) { yFrom, yTo ->
+          val row = IntArray(w)
+          for (y in yFrom until yTo) {
             src.getPixels(row, 0, w, 0, y, w, 1)
             val gy = ((y + 0.5f) * sh / h - 0.5f).coerceIn(0f, sh - 1.001f)
             val y0 = gy.toInt()
@@ -1107,6 +1148,7 @@ object Imaging {
                 }
                 v[y * w + x] = ink.toInt().coerceIn(0, 255).toByte()
             }
+          }
         }
         // 2) local mean / std on a 1/f grid (box filter), bilinear back to full size
         val f = max(1, min(w, h) / 600)
@@ -1114,7 +1156,7 @@ object Imaging {
         val gh = (h + f - 1) / f
         val m1 = FloatArray(gw * gh)
         val m2 = FloatArray(gw * gh)
-        for (gy in 0 until gh) {
+        parallelRange(gh, 16) { gFrom, gTo -> for (gy in gFrom until gTo) {
             for (gx in 0 until gw) {
                 var s1 = 0f
                 var s2 = 0f
@@ -1130,7 +1172,7 @@ object Imaging {
                 m1[gy * gw + gx] = s1 / n
                 m2[gy * gw + gx] = s2 / n
             }
-        }
+        } }
         val rad = max(2, ((min(w, h) / bwWin) / (2f * f)).roundToInt())
         val mean = boxBlurSeparable(m1, gw, gh, rad)
         val sq = boxBlurSeparable(m2, gw, gh, rad)
@@ -1145,7 +1187,9 @@ object Imaging {
             gfx[x] = gx - gx0[x]
         }
         val k = bwK
-        for (y in 0 until h) {
+        parallelRange(h, 64) { yFrom, yTo ->
+          val row = IntArray(w)
+          for (y in yFrom until yTo) {
             val gy = ((y + 0.5f) / f - 0.5f).coerceIn(0f, max(0f, gh - 1.001f))
             val ya = gy.toInt()
             val yb = min(gh - 1, ya + 1)
@@ -1169,6 +1213,7 @@ object Imaging {
                 row[x] = (0xFF shl 24) or (o shl 16) or (o shl 8) or o
             }
             out.setPixels(row, 0, w, 0, y, w, 1)
+          }
         }
         return out
     }
@@ -1235,11 +1280,18 @@ object Imaging {
 
         val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val rows = 32
-        val inBuf = IntArray(w * (rows + 2))
-        val tm = IntArray(w * (rows + 2))
-        val outBuf = IntArray(w * rows)
-        var y = 0
-        while (y < h) {
+        // v3.3: blocks of 32 rows are independent (each reads one extra row above and below), so they are spread
+        // over all CPU cores. Every worker has its own buffers; the result is identical to the single-thread run.
+        val nBlocks = (h + rows - 1) / rows
+        val nextBlock = java.util.concurrent.atomic.AtomicInteger(0)
+        runParallel {
+          val inBuf = IntArray(w * (rows + 2))
+          val tm = IntArray(w * (rows + 2))
+          val outBuf = IntArray(w * rows)
+          while (true) {
+            val bi = nextBlock.getAndIncrement()
+            if (bi >= nBlocks) break
+            val y = bi * rows
             val n = min(rows, h - y)
             for (j in 0 until n + 2) {
                 val ry = (y - 1 + j).coerceIn(0, h - 1)
@@ -1498,7 +1550,7 @@ object Imaging {
                 }
             }
             out.setPixels(outBuf, 0, w, 0, y, w, n)
-            y += n
+          }
         }
         return out
     }

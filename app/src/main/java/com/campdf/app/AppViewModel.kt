@@ -53,6 +53,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var themeMode by mutableIntStateOf(prefs.theme)
     var defaultQuality by mutableIntStateOf(prefs.quality)
     var autoDetect by mutableStateOf(prefs.autoDetect)
+    var autoCapture by mutableStateOf(prefs.autoCapture)
     var removeFingers by mutableStateOf(prefs.removeFingers)
     var appLock by mutableStateOf(prefs.appLock)
 
@@ -469,6 +470,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setTheme(v: Int) { themeMode = v; prefs.theme = v }
     fun updateDefaultQuality(v: Int) { defaultQuality = v; prefs.quality = v }
     fun updateAutoDetect(v: Boolean) { autoDetect = v; prefs.autoDetect = v }
+    fun updateAutoCapture(v: Boolean) { autoCapture = v; prefs.autoCapture = v }
     fun updateRemoveFingers(v: Boolean) {
         removeFingers = v
         prefs.removeFingers = v

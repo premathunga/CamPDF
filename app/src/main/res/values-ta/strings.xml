@@ -30,6 +30,10 @@
     <string name="camera_perm">ஆவணங்களை ஸ்கேன் செய்ய கேமரா அனுமதி தேவை.</string>
     <string name="grant">அனுமதி வழங்கு</string>
     <string name="camera_hint">ஆவணத்தை சட்டத்துக்குள் வைக்கவும்</string>
+    <string name="hint_searching">பக்கத்தைத் தேடுகிறது…</string>
+    <string name="hint_hold_steady">பக்கம் கண்டறியப்பட்டது – அசையாமல் பிடிக்கவும்</string>
+    <string name="hint_capturing">படம் எடுக்கிறது…</string>
+    <string name="hint_page_found">பக்கம் கண்டறியப்பட்டது – எடுக்க தட்டவும்</string>
     <string name="crop_title">விளிம்புகளை சரிசெய்</string>
     <string name="auto">தானியங்கி</string>
     <string name="full_page">முழு</string>

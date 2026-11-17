@@ -7,6 +7,7 @@ import java.awt.BasicStroke
 // usage: in.jpg outPrefix [modes comma] 
 fun main(args: Array<String>) {
     fun pf(n: String, f: (Float) -> Unit) { System.getProperty(n)?.let { f(it.toFloat()) } }
+    pf("thr") { Imaging.threads = it.toInt() }
     pf("mb") { Imaging.MAGIC_BLACK = it }; pf("mw") { Imaging.MAGIC_WHITE = it }; pf("mc") { Imaging.MAGIC_CHROMA = it }
     pf("cd") { Imaging.MAGIC_CDARK = it }
     pf("mr") { Imaging.MAGIC_RED = it }

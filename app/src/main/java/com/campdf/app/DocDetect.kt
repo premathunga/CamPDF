@@ -1,5 +1,7 @@
 package com.campdf.app
 
+import android.graphics.Bitmap
+
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
@@ -133,10 +135,33 @@ object DocDetect {
         val bm = Imaging.loadOriented(path, 400) ?: return null
         val w = bm.width
         val h = bm.height
-        val total = w * h
-        val px = IntArray(total)
+        val px = IntArray(w * h)
         bm.getPixels(px, 0, w, 0, 0, w, h)
         bm.recycle()
+        val norm = detectPixels(px, w, h) ?: return null
+        return refineHiRes(path, norm) ?: norm
+    }
+
+    /**
+     * v3.3: detection on an image already in memory - used for the live camera preview. The bitmap must be upright;
+     * it is scaled to at most 400 px on the long side. No high-resolution refinement (the preview frame is small and
+     * the crop screen runs the full detection on the photo anyway). Returns normalized TL,TR,BR,BL or null.
+     */
+    fun detectBitmap(bm: Bitmap): FloatArray? {
+        val longSide = max(bm.width, bm.height)
+        val s = if (longSide > 400) 400f / longSide else 1f
+        val w = max(16, (bm.width * s).roundToInt())
+        val h = max(16, (bm.height * s).roundToInt())
+        val small = if (s < 1f) Bitmap.createScaledBitmap(bm, w, h, true) else bm
+        val px = IntArray(w * h)
+        small.getPixels(px, 0, w, 0, 0, w, h)
+        if (small !== bm) small.recycle()
+        return detectPixels(px, w, h)
+    }
+
+    /** Core detection on a small (about 400 px) image; normalized TL,TR,BR,BL or null. Thread-safe. */
+    private fun detectPixels(px: IntArray, w: Int, h: Int): FloatArray? {
+        val total = w * h
         val gray = FloatArray(total) {
             val p = px[it]
             ((p shr 16) and 255) * 0.299f + ((p shr 8) and 255) * 0.587f + (p and 255) * 0.114f
@@ -232,8 +257,7 @@ object DocDetect {
         val q = bestQ ?: return null
         if (bestS < MIN_SCORE) return null
         val snapped = refineQuad(q, mag, w, h)
-        val norm = toNorm(snapped, w, h)
-        return refineHiRes(path, norm) ?: norm
+        return toNorm(snapped, w, h)
     }
 
     /**

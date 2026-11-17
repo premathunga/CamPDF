@@ -23,6 +23,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("auto_detect", true)
         set(v) { sp.edit().putBoolean("auto_detect", v).apply() }
 
+    /** v3.3: take the photo automatically when the page has been held steady in the live preview. */
+    var autoCapture: Boolean
+        get() = sp.getBoolean("auto_capture", true)
+        set(v) { sp.edit().putBoolean("auto_capture", v).apply() }
+
     /** Whiten fingers that hold the page (on by default). */
     var removeFingers: Boolean
         get() = sp.getBoolean("remove_fingers", true)

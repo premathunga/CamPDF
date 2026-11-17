@@ -173,3 +173,19 @@ Same reference photo as v3.1 (a form lying on a pile of papers in a file, phone 
 - Checked on the 29 `tune` photos, 6 unseen Sinhala photos and 8 English samples: no page lost compared with
   v3.1. Known leftovers on the reference photo: a strip of the folder above the top-left corner, a streak from
   the shadow edge at the bottom, and the crop runs to the bottom of the photo instead of the sheet's own edge.
+
+## v3.3.0 - live page outline, auto-capture, multi-core filters
+- **Live page detection in the camera.** A small 4:3 analysis stream (~640x480, newest frame only) runs the same
+  detector as the crop screen (`DocDetect.detectBitmap`: PageNet + straight edges, no hi-res refine) on a
+  background thread; the page outline is drawn over the preview and turns green while the page is held steady.
+  If a camera cannot run preview + photo + analysis together, the app falls back to preview + photo.
+- **Auto-capture** (on by default, "Auto" chip in the camera top bar, remembered): the photo is taken when the
+  page has been steady for 1.2 s (no corner moving more than 2.5% of the frame) and covers at least 12% of the
+  frame. A ring around the shutter shows the countdown. `LiveTracker.kt` holds this logic (smoothing, misses,
+  steadiness) and is unit-tested on the PC (`tools/jvmtest/LiveTest.kt`).
+- The crop screen still runs the full detection (with sub-pixel refinement) on the real photo.
+- **Multi-core filters.** Magic / Enhance / No-shadow process 32-row blocks on all cores (up to 8); B&W and the
+  border clean-up are split by rows. Output is bit-for-bit identical to the single-thread version (checked on
+  4 filters x 3 photos). On a 2-core PC: Magic 1.3 s -> 0.85 s, B&W 0.8 s -> 0.6 s; phones with 8 cores gain more.
+- Live detection takes ~0.3 s per frame on a 2-core PC (about 3 outline updates per second); phone speed not
+  measured yet.

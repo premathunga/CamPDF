@@ -2,6 +2,10 @@ package com.campdf.app.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Matrix
+import android.os.SystemClock
+import android.util.Size
 import android.view.OrientationEventListener
 import android.view.Surface
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -9,9 +13,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
@@ -58,7 +66,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
@@ -68,9 +79,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.campdf.app.AppViewModel
+import com.campdf.app.DocDetect
+import com.campdf.app.LiveTracker
 import com.campdf.app.R
 import java.io.File
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 @Composable
 fun CameraScreen(vm: AppViewModel) {
@@ -109,6 +124,7 @@ fun CameraScreen(vm: AppViewModel) {
 private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
     val ctx = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val haptic = LocalHapticFeedback.current
     val c = MaterialTheme.colorScheme
 
     val previewView = remember {
@@ -119,8 +135,17 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
     var torch by remember { mutableStateOf(false) }
     var capturing by remember { mutableStateOf(false) }
 
-    DisposableEffect(lifecycleOwner) {
+    // v3.3 live page detection: the outline of the page found in the preview, and how long it has been steady
+    val liveOn = vm.autoDetect
+    var liveQuad by remember { mutableStateOf<FloatArray?>(null) }
+    var steady by remember { mutableStateOf(0f) }
+    val tracker = remember { LiveTracker() }
+    val paused = remember { AtomicBoolean(false) }
+    val analysisExecutor = remember { Executors.newSingleThreadExecutor { r -> Thread(r, "CamPDF-live").apply { isDaemon = true } } }
+
+    DisposableEffect(lifecycleOwner, liveOn) {
         val future = ProcessCameraProvider.getInstance(ctx)
+        val main = ContextCompat.getMainExecutor(ctx)
         future.addListener({
             try {
                 val provider = future.get()
@@ -128,8 +153,53 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
                 val capture = ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
                     .build()
+                // small 4:3 frames (same field of view as the 4:3 preview and photo) for the page detector
+                val analysis = if (!liveOn) null else ImageAnalysis.Builder()
+                    .setResolutionSelector(
+                        ResolutionSelector.Builder()
+                            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                            .setResolutionStrategy(
+                                ResolutionStrategy(Size(640, 480), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER)
+                            )
+                            .build()
+                    )
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                    .build()
+                    .also { a ->
+                        a.setAnalyzer(analysisExecutor) { proxy ->
+                            try {
+                                if (!paused.get()) {
+                                    val frame = proxy.toBitmap()
+                                    val rot = proxy.imageInfo.rotationDegrees
+                                    val s = 400f / maxOf(frame.width, frame.height)
+                                    val m = Matrix().apply { postScale(s, s); postRotate(rot.toFloat()) }
+                                    val upright = Bitmap.createBitmap(frame, 0, 0, frame.width, frame.height, m, true)
+                                    if (upright !== frame) frame.recycle()
+                                    val q = runCatching { DocDetect.detectBitmap(upright) }.getOrNull()
+                                    upright.recycle()
+                                    val st = tracker.update(q, SystemClock.elapsedRealtime())
+                                    main.execute {
+                                        liveQuad = st.quad
+                                        steady = st.progress
+                                    }
+                                }
+                            } catch (_: Throwable) {
+                                // a bad frame is skipped; the next one is analysed
+                            } finally {
+                                proxy.close()
+                            }
+                        }
+                    }
                 provider.unbindAll()
-                val boundCamera = provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture)
+                val boundCamera = try {
+                    if (analysis != null) provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture, analysis)
+                    else provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture)
+                } catch (e: Exception) {
+                    // some cameras cannot run three streams at once: keep preview + photo, no live outline
+                    provider.unbindAll()
+                    provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, capture)
+                }
                 camera = boundCamera
                 imageCapture = capture
                 // Let the camera settle focus and exposure around the center of the document guide.
@@ -142,10 +212,14 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
             } catch (e: Exception) {
                 // camera unavailable; the user can still import images from the gallery
             }
-        }, ContextCompat.getMainExecutor(ctx))
+        }, main)
         onDispose {
             runCatching { future.get().unbindAll() }
         }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { analysisExecutor.shutdown() }
     }
 
     // v2.8.0: the activity is locked to portrait, so without this every photo taken with the phone held
@@ -178,6 +252,7 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
         val ic = imageCapture ?: return
         if (capturing) return
         capturing = true
+        paused.set(true)
         val f = File(ctx.cacheDir, "raw_${System.currentTimeMillis()}.jpg")
         ic.takePicture(
             ImageCapture.OutputFileOptions.Builder(f).build(),
@@ -185,15 +260,27 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     capturing = false
+                    tracker.reset()
                     vm.onCaptured(f.absolutePath)
                 }
 
                 override fun onError(exception: ImageCaptureException) {
                     capturing = false
+                    tracker.reset()
+                    paused.set(false)
                     f.delete()
                 }
             }
         )
+    }
+
+    // auto-capture: the page has been held steady long enough
+    val autoCapture = vm.autoCapture
+    LaunchedEffect(steady >= 1f, autoCapture) {
+        if (liveOn && autoCapture && steady >= 1f && !capturing && liveQuad != null) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            capture()
+        }
     }
 
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -203,6 +290,19 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
         ) {
             IconButton(onClick = { vm.onBack() }) { Icon(Icons.Rounded.Close, null, tint = Color.White) }
             Box(Modifier.weight(1f))
+            if (liveOn) {
+                // auto-capture switch
+                Text(
+                    stringResource(R.string.auto),
+                    color = if (autoCapture) Color.Black else Color.White,
+                    fontSize = 13.sp,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(if (autoCapture) c.tertiary else Color.White.copy(alpha = 0.18f))
+                        .clickable { vm.updateAutoCapture(!autoCapture) }
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                )
+            }
             IconButton(onClick = { torch = !torch }) {
                 Icon(
                     if (torch) Icons.Rounded.FlashOn else Icons.Rounded.FlashOff,
@@ -213,9 +313,23 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
         }
         Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f)) {
             AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+            val q = liveQuad
+            val primary = c.primary
             Canvas(Modifier.fillMaxSize()) {
-                // A portrait-page guide with corner brackets and thirds, rather than a generic
-                // dashed rectangle, gives a more useful framing reference for document capture.
+                if (q != null) {
+                    // the page found in the live preview; it turns green while it is held steady
+                    val p = List(4) { Offset(q[2 * it] * size.width, q[2 * it + 1] * size.height) }
+                    val path = Path().apply {
+                        moveTo(p[0].x, p[0].y); lineTo(p[1].x, p[1].y); lineTo(p[2].x, p[2].y); lineTo(p[3].x, p[3].y); close()
+                    }
+                    val col = if (steady > 0f) Color(0xFF34C759) else primary
+                    drawPath(path, col.copy(alpha = 0.18f + 0.17f * steady))
+                    drawPath(path, Color.Black.copy(alpha = 0.45f), style = Stroke(width = 5.dp.toPx()))
+                    drawPath(path, col, style = Stroke(width = 3.dp.toPx()))
+                    p.forEach { drawCircle(Color.White, 6.dp.toPx(), it); drawCircle(col, 4.dp.toPx(), it) }
+                    return@Canvas
+                }
+                // No page found (or live detection off): a portrait-page guide with corner brackets and thirds.
                 val guideW = size.width * 0.82f
                 val guideH = size.height * 0.78f
                 val left = (size.width - guideW) / 2f
@@ -248,8 +362,15 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
                     drawLine(Color.White.copy(alpha = 0.28f), Offset(x, top + 8.dp.toPx()), Offset(x, bottom - 8.dp.toPx()), 1.dp.toPx())
                 }
             }
+            val hint = when {
+                !liveOn -> R.string.camera_hint
+                capturing -> R.string.hint_capturing
+                q == null -> R.string.hint_searching
+                autoCapture -> R.string.hint_hold_steady
+                else -> R.string.hint_page_found
+            }
             Text(
-                stringResource(R.string.camera_hint),
+                stringResource(hint),
                 color = Color.White,
                 fontSize = 13.sp,
                 modifier = Modifier
@@ -272,18 +393,36 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
             IconButton(onClick = onGallery, modifier = Modifier.size(56.dp), enabled = !capturing) {
                 Icon(Icons.Rounded.PhotoLibrary, null, tint = Color.White, modifier = Modifier.size(30.dp))
             }
-            Box(
-                Modifier
-                    .size(78.dp)
-                    .clip(CircleShape)
-                    .border(4.dp, Color.White, CircleShape)
-                    .padding(7.dp)
-                    .clip(CircleShape)
-                    .background(c.primary)
-                    .clickable(enabled = !capturing) { capture() },
-                contentAlignment = Alignment.Center
-            ) {
-                if (capturing) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(30.dp))
+            Box(Modifier.size(78.dp), contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier
+                        .size(78.dp)
+                        .clip(CircleShape)
+                        .border(4.dp, Color.White, CircleShape)
+                        .padding(7.dp)
+                        .clip(CircleShape)
+                        .background(c.primary)
+                        .clickable(enabled = !capturing) { capture() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (capturing) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(30.dp))
+                }
+                // auto-capture countdown around the shutter
+                if (liveOn && autoCapture && steady > 0f && !capturing) {
+                    val green = Color(0xFF34C759)
+                    Canvas(Modifier.size(78.dp)) {
+                        val sw = 4.dp.toPx()
+                        drawArc(
+                            color = green,
+                            startAngle = -90f,
+                            sweepAngle = 360f * steady,
+                            useCenter = false,
+                            topLeft = Offset(sw / 2, sw / 2),
+                            size = Size(size.width - sw, size.height - sw),
+                            style = Stroke(width = sw, cap = StrokeCap.Round)
+                        )
+                    }
+                }
             }
             Box(Modifier.size(56.dp))
         }

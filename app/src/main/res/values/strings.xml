@@ -31,6 +31,10 @@
     <string name="camera_perm">Camera permission is needed to scan documents.</string>
     <string name="grant">Grant permission</string>
     <string name="camera_hint">Place the document inside the frame</string>
+    <string name="hint_searching">Looking for the page…</string>
+    <string name="hint_hold_steady">Page found – hold steady</string>
+    <string name="hint_capturing">Capturing…</string>
+    <string name="hint_page_found">Page found – tap to capture</string>
     <string name="crop_title">Adjust edges</string>
     <string name="auto">Auto</string>
     <string name="full_page">Full</string>
