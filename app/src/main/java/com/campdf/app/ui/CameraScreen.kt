@@ -5,7 +5,6 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.os.SystemClock
-import android.util.Size
 import android.view.OrientationEventListener
 import android.view.Surface
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -159,7 +158,7 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
                         ResolutionSelector.Builder()
                             .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
                             .setResolutionStrategy(
-                                ResolutionStrategy(Size(640, 480), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER)
+                                ResolutionStrategy(android.util.Size(640, 480), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER)
                             )
                             .build()
                     )
