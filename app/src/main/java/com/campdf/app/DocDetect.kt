@@ -29,6 +29,7 @@ object DocDetect {
 
     @Volatile var lastScore = 0f
     @Volatile var usePageNet = true
+    @Volatile var LIVE_MIN_S = 0.20f
     @Volatile var lastProb: FloatArray? = null
     @Volatile var lastW = 0
     @Volatile var lastH = 0
@@ -207,6 +208,14 @@ object DocDetect {
         val sx = (fw - 1f) / (w - 1)
         val sy = (fh - 1f) / (h - 1)
         val qf = q.map { Pt(it.x * sx, it.y * sy) }
+        // v3.3.2: a network quad that the image does not back up - a side across the paper with no edge under it
+        // (a large shadow on a page that fills the frame) or more paper beyond a side - is not trusted: this frame
+        // goes to the full detector, which weighs the network against the real edges.
+        val lq = LineQuad(px, fw, fh)
+        val lqQ = LineQuad.Q(FloatArray(4) { qf[it].x }, FloatArray(4) { qf[it].y })
+        val liveS = lq.score(lqQ)
+        val liveInner = lq.minInnerSupport(lqQ)
+        if (liveInner < 0.01f || liveS < LIVE_MIN_S) return detectBitmap(bm)
         val snapped = refineQuad(qf, mag, fw, fh)
         val out = FloatArray(8)
         for (i in 0 until 4) {
@@ -302,7 +311,11 @@ object DocDetect {
             var bIou = 0f
             for ((q, s) in all) {
                 val iou = softIou(q, prob, w, h)
-                val f = Math.pow(s.toDouble().coerceAtLeast(0.05), FUSE_S).toFloat() * Math.pow(iou.toDouble(), FUSE_IOU).toFloat()
+                var f = Math.pow(s.toDouble().coerceAtLeast(0.05), FUSE_S).toFloat() * Math.pow(iou.toDouble(), FUSE_IOU).toFloat()
+                // v3.3.2: a side across the paper with no edge under it at all is not believed (page filling the
+                // frame with a big shadow: the network called the shadow "background" and cut the page diagonally)
+                val inner = lq.minInnerSupport(LineQuad.Q(FloatArray(4) { q[it].x }, FloatArray(4) { q[it].y }))
+                f *= (0.25f + 0.75f * ((inner - 0.01f) / 0.04f).coerceIn(0f, 1f))
                 if (f > bs) { bs = f; bq = q; bIou = iou }
             }
             if (bq != null && bIou > 0.5f) {

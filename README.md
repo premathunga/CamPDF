@@ -209,3 +209,14 @@ came out smaller (page 1210 px wide instead of ~1900) with colour fringes; a rec
 - **Straightening no longer cuts content.** The post-warp straightening kept the old canvas size, so content
   pushed past an edge was lost (the "6430" total at the bottom of the receipt). The canvas now grows to hold it.
 - **Border clean-up** also removes slivers of cloth / table that run along a border (long contact, shallow).
+
+## v3.3.2 - page that fills the frame with a large shadow
+Phone test: a police message form photographed close-up (page fills the whole frame, white table, large soft
+shadow over the lower half). PageNet took the shadowed half for background, so the crop ran diagonally across the
+page and the scan came out distorted.
+- `LineQuad.minInnerSupport`: the weakest edge evidence among the sides of a quad that are not on the frame border.
+- Fusion (`DocDetect`): a candidate with a side across the paper where the image has no edge at all is down-weighted
+  (x0.25). On this photo the crop is now the whole page; the 71 other test photos give exactly the same corners.
+- Live (`detectLive`): when the network's quad has such a side, or its sides are poorly backed (score < 0.20), the
+  frame goes to the full detector. Live speed unchanged (66 ms median on the PC); auto-capture simulation: 63/63
+  pages captured, median 1.0 s.

@@ -310,6 +310,21 @@ class LineQuad(private val px: IntArray, private val w: Int, private val h: Int)
     fun score(q: Q): Float = score(q, null, true)
 
     /**
+     * v3.3.2: weakest edge evidence among the sides that are NOT on the frame border (1 when all are on the border).
+     * A side drawn across the paper where nothing in the image changes - e.g. the network mistaking a large shadow
+     * for background - has support near 0.
+     */
+    fun minInnerSupport(q: Q): Float {
+        var m = 1f
+        for (i in 0 until 4) {
+            val j = (i + 1) % 4
+            if (onFrame(q.x[i], q.y[i], q.x[j], q.y[j])) continue
+            m = min(m, sideSupport(q.x[i], q.y[i], q.x[j], q.y[j]))
+        }
+        return m
+    }
+
+    /**
      * Paper colour inside the quad (L, a, b of the blurred channels): 88th percentile of L on a 15x15 grid,
      * colour = median of the samples near that brightness.
      */
