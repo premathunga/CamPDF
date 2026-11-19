@@ -29,6 +29,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.Undo
 import androidx.compose.material.icons.rounded.AddAPhoto
 import androidx.compose.material.icons.rounded.AutoFixHigh
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Crop
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
@@ -67,6 +68,8 @@ fun ReviewScreen(vm: AppViewModel) {
     val page = pages.getOrNull(sel)
     val preview by rememberPageImage(page, 1400)
     var filterOpen by remember { mutableStateOf(false) }
+    // v3.4.1: page index waiting for the "delete page?" confirmation (from the X on a thumbnail or the toolbar)
+    var confirmDelete by remember { mutableStateOf(-1) }
 
     Column(Modifier.fillMaxSize().background(c.background)) {
         ScreenTopBar(stringResource(R.string.review_title), onBack = { vm.onBack() }) {
@@ -101,7 +104,7 @@ fun ReviewScreen(vm: AppViewModel) {
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             itemsIndexed(pages, key = { _, p -> p.id }) { index, p ->
-                Thumb(p, index, index == sel) { vm.selected = index }
+                Thumb(p, index, index == sel, onDelete = { vm.selected = index; confirmDelete = index }) { vm.selected = index }
             }
             item {
                 Box(
@@ -142,6 +145,7 @@ fun ReviewScreen(vm: AppViewModel) {
                 stringResource(R.string.filter),
                 tint = if (filterOpen) c.primary else c.onSurface
             ) { filterOpen = !filterOpen }
+            ToolButton(Icons.Rounded.Delete, stringResource(R.string.delete), tint = c.error) { if (page != null) confirmDelete = sel }
             ToolButton(Icons.Rounded.Edit, stringResource(R.string.sign)) { vm.openSign() }
             if (page != null && page.stamps.isNotEmpty()) {
                 ToolButton(Icons.AutoMirrored.Rounded.Undo, stringResource(R.string.remove_signature)) { vm.undoSignature() }
@@ -152,7 +156,6 @@ fun ReviewScreen(vm: AppViewModel) {
                 stringResource(R.string.move_right),
                 enabled = sel < pages.size - 1
             ) { vm.moveSelected(1) }
-            ToolButton(Icons.Rounded.Delete, stringResource(R.string.delete), tint = c.error) { vm.deleteSelected() }
         }
 
         PrimaryButton(
@@ -164,6 +167,28 @@ fun ReviewScreen(vm: AppViewModel) {
             icon = Icons.Rounded.PictureAsPdf,
             enabled = pages.isNotEmpty()
         ) { vm.createPdf() }
+    }
+
+    if (confirmDelete >= 0) {
+        val n = confirmDelete + 1
+        val last = pages.size <= 1
+        AlertDialog(
+            onDismissRequest = { confirmDelete = -1 },
+            title = { Text(stringResource(R.string.delete_page_title, n)) },
+            text = { Text(stringResource(if (last) R.string.delete_last_page_msg else R.string.delete_page_msg)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (confirmDelete in pages.indices) {
+                        vm.selected = confirmDelete
+                        vm.deleteSelected()
+                    }
+                    confirmDelete = -1
+                }) { Text(stringResource(R.string.delete), color = c.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = -1 }) { Text(stringResource(R.string.cancel)) }
+            }
+        )
     }
 
     if (vm.showDiscard) {
@@ -223,7 +248,7 @@ private fun FilterThumb(page: PageItem, mode: FilterMode, selected: Boolean, onC
 }
 
 @Composable
-private fun Thumb(page: PageItem, index: Int, selected: Boolean, onClick: () -> Unit) {
+private fun Thumb(page: PageItem, index: Int, selected: Boolean, onDelete: () -> Unit, onClick: () -> Unit) {
     val c = MaterialTheme.colorScheme
     val img by rememberPageImage(page, 220)
     val shape = RoundedCornerShape(12.dp)
@@ -249,5 +274,20 @@ private fun Thumb(page: PageItem, index: Int, selected: Boolean, onClick: () -> 
                 .background(if (selected) c.primary else androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.6f))
                 .padding(horizontal = 7.dp, vertical = 2.dp)
         )
+        // v3.4.1: small X in the top-right corner of the selected page = delete this page (asks first)
+        if (selected) {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .size(30.dp)
+                    .clickable(onClick = onDelete)
+                    .padding(4.dp)
+                    .clip(CircleShape)
+                    .background(c.error),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Rounded.Close, stringResource(R.string.delete), tint = c.onError, modifier = Modifier.size(15.dp))
+            }
+        }
     }
 }

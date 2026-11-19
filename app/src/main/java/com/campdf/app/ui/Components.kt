@@ -6,9 +6,11 @@ import android.content.Context
 import android.content.Intent
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -55,18 +57,22 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 fun AppCard(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
+    selected: Boolean = false,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val c = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(24.dp)
     var m = modifier
         .clip(shape)
-        .background(c.surfaceContainer)
-        .border(1.dp, c.outlineVariant, shape)
-    if (onClick != null) m = m.clickable(onClick = onClick)
+        .background(if (selected) c.primaryContainer else c.surfaceContainer)
+        .border(if (selected) 2.dp else 1.dp, if (selected) c.primary else c.outlineVariant, shape)
+    if (onLongClick != null) m = m.combinedClickable(onClick = { onClick?.invoke() }, onLongClick = onLongClick)
+    else if (onClick != null) m = m.clickable(onClick = onClick)
     Column(m, content = content)
 }
 
@@ -205,6 +211,22 @@ fun openPdf(ctx: Context, vm: AppViewModel, file: File) {
     } catch (e: ActivityNotFoundException) {
         Toast.makeText(ctx, R.string.no_viewer, Toast.LENGTH_SHORT).show()
     }
+}
+
+/** v3.4: shares several PDFs in one go (one share sheet, e.g. one WhatsApp / e-mail message). */
+fun sharePdfs(ctx: Context, vm: AppViewModel, files: List<File>) {
+    if (files.isEmpty()) return
+    if (files.size == 1) { sharePdf(ctx, vm, files[0]); return }
+    val uris = ArrayList(files.map { vm.repo.uri(it) })
+    val i = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+        type = "application/pdf"
+        putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris)
+        val clip = ClipData.newRawUri(files[0].name, uris[0])
+        for (k in 1 until uris.size) clip.addItem(ClipData.Item(uris[k]))
+        clipData = clip
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    ctx.startActivity(Intent.createChooser(i, null))
 }
 
 fun sharePdf(ctx: Context, vm: AppViewModel, file: File) {

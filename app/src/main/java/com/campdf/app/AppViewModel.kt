@@ -162,6 +162,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** v3.4: deletes several documents at once (multi-select on the home screen). */
+    fun deleteDocs(list: List<DocItem>) {
+        if (list.isEmpty()) return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { list.forEach { repo.delete(it.file) } }
+            refreshDocs()
+        }
+    }
+
     fun renameDoc(doc: DocItem, name: String) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { repo.rename(doc.file, name) }

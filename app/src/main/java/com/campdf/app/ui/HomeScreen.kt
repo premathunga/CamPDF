@@ -1,6 +1,7 @@
 package com.campdf.app.ui
 
 import android.text.format.Formatter
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -24,6 +25,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.RadioButtonUnchecked
+import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Edit
@@ -44,7 +49,9 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -73,6 +80,15 @@ fun HomeScreen(vm: AppViewModel) {
     var query by remember { mutableStateOf("") }
     var renameDoc by remember { mutableStateOf<DocItem?>(null) }
     var deleteDoc by remember { mutableStateOf<DocItem?>(null) }
+    // v3.4 multi-select: long-press a document to start, tap to add / remove, then share or delete them together
+    val selected = remember { mutableStateListOf<String>() }
+    var deleteSelected by remember { mutableStateOf(false) }
+    val selecting = selected.isNotEmpty()
+    BackHandler(enabled = selecting) { selected.clear() }
+    fun toggle(doc: DocItem) {
+        val k = doc.file.name
+        if (k in selected) selected.remove(k) else selected.add(k)
+    }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         if (uris.isNotEmpty()) vm.importUris(uris)
@@ -80,9 +96,38 @@ fun HomeScreen(vm: AppViewModel) {
 
     val all = vm.docs
     val list = if (query.isBlank()) all else all.filter { it.name.contains(query, ignoreCase = true) }
+    // forget selections of documents that no longer exist (deleted / renamed)
+    LaunchedEffect(all) { val names = all.map { it.file.name }.toSet(); selected.retainAll { it in names } }
+    val selectedDocs = all.filter { it.file.name in selected }
 
     Box(Modifier.fillMaxSize().background(c.background)) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
+            if (selecting) {
+                // selection bar: close, "N selected", select all, share, delete
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 12.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { selected.clear() }) { Icon(Icons.Rounded.Close, stringResource(R.string.cancel), tint = c.onSurface) }
+                    Text(
+                        stringResource(R.string.n_selected, selected.size),
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = c.onBackground,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = {
+                        val keys = list.map { it.file.name }
+                        if (keys.all { it in selected }) selected.removeAll(keys) else keys.forEach { if (it !in selected) selected.add(it) }
+                    }) { Icon(Icons.Rounded.SelectAll, stringResource(R.string.select_all), tint = c.onSurface) }
+                    IconButton(onClick = { sharePdfs(ctx, vm, selectedDocs.map { it.file }) }) {
+                        Icon(Icons.Rounded.Share, stringResource(R.string.share), tint = c.primary)
+                    }
+                    IconButton(onClick = { deleteSelected = true }) {
+                        Icon(Icons.Rounded.Delete, stringResource(R.string.delete), tint = c.error)
+                    }
+                }
+            } else {
             Row(
                 Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -97,6 +142,7 @@ fun HomeScreen(vm: AppViewModel) {
                 IconButton(onClick = { vm.screen = Screen.Settings }) {
                     Icon(Icons.Rounded.Settings, null, tint = c.onSurface)
                 }
+            }
             }
             OutlinedTextField(
                 value = query,
@@ -143,7 +189,10 @@ fun HomeScreen(vm: AppViewModel) {
                     items(list, key = { it.file.name }) { doc ->
                         DocRow(
                             doc,
-                            onOpen = { vm.openViewer(doc) },
+                            selecting = selecting,
+                            isSelected = doc.file.name in selected,
+                            onToggle = { toggle(doc) },
+                            onOpen = { if (selecting) toggle(doc) else vm.openViewer(doc) },
                             onEdit = { vm.editDoc(doc) },
                             onShare = { sharePdf(ctx, vm, doc.file) },
                             onRename = { renameDoc = doc },
@@ -154,7 +203,7 @@ fun HomeScreen(vm: AppViewModel) {
             }
         }
 
-        Row(
+        if (!selecting) Row(
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
@@ -197,6 +246,25 @@ fun HomeScreen(vm: AppViewModel) {
         )
     }
 
+    if (deleteSelected) {
+        val n = selectedDocs.size
+        AlertDialog(
+            onDismissRequest = { deleteSelected = false },
+            title = { Text(stringResource(R.string.delete_docs_title, n)) },
+            text = { Text(stringResource(R.string.delete_docs_msg, n)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deleteDocs(selectedDocs)
+                    selected.clear()
+                    deleteSelected = false
+                }) { Text(stringResource(R.string.delete), color = c.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteSelected = false }) { Text(stringResource(R.string.cancel)) }
+            }
+        )
+    }
+
     deleteDoc?.let { doc ->
         AlertDialog(
             onDismissRequest = { deleteDoc = null },
@@ -218,6 +286,9 @@ fun HomeScreen(vm: AppViewModel) {
 @Composable
 private fun DocRow(
     doc: DocItem,
+    selecting: Boolean,
+    isSelected: Boolean,
+    onToggle: () -> Unit,
     onOpen: () -> Unit,
     onShare: () -> Unit,
     onEdit: () -> Unit,
@@ -240,7 +311,7 @@ private fun DocRow(
         .filter { it.isNotEmpty() }
         .joinToString(" • ")
 
-    AppCard(Modifier.fillMaxWidth(), onClick = onOpen) {
+    AppCard(Modifier.fillMaxWidth(), onClick = onOpen, onLongClick = onToggle, selected = isSelected) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier
@@ -269,7 +340,15 @@ private fun DocRow(
                 Spacer(Modifier.height(4.dp))
                 Text(meta, color = c.onSurfaceVariant, fontSize = 12.sp, maxLines = 2)
             }
-            Box {
+            if (selecting) {
+                IconButton(onClick = onToggle) {
+                    Icon(
+                        if (isSelected) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked,
+                        null,
+                        tint = if (isSelected) c.primary else c.onSurfaceVariant
+                    )
+                }
+            } else Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, null, tint = c.onSurfaceVariant) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(

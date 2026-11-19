@@ -232,3 +232,15 @@ out with the shadow turned into a speckled yellow-green patch.
   Magic chroma dead-zone now grows with that factor (up to 3x), so the noise is not boosted into colour speckles.
 - Reproduced on the PC with a tinted, noisy shadow added to the form photo: patch gone. Other test pages: coloured
   headers and blue / red ink unchanged.
+
+## v3.4.0 - select several documents
+- All Documents list: **long-press** a document to start selecting, then tap others to add or remove them.
+- The top bar shows how many are selected, with **Select all**, **Share** (all selected PDFs in one share sheet,
+  e.g. one WhatsApp or e-mail message) and **Delete** (one confirmation for all).
+- Close (X) or the Back button leaves selection mode. Scan / Import buttons are hidden while selecting.
+
+## v3.4.1 - delete a page from its thumbnail
+- Review pages: the selected page thumbnail shows a small red **X** in its top-right corner; tap it to delete that
+  page (no need to scroll the tool row to the end). The tool-row Delete still works.
+- Both ask "Delete page N?" first; deleting the only page warns that the whole scan will be discarded.
+- v3.4.2: the tool-row Delete moved from the end to 5th place (Add, Rotate, Crop, Filter, Delete, Sign, Left, Right).

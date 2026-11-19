@@ -27,6 +27,13 @@
     <string name="done">අවසන්</string>
     <string name="delete_doc_title">ලේඛනය මකන්නද?</string>
     <string name="delete_doc_msg">%1$s ස්ථිරවම මැකෙනු ඇත.</string>
+    <string name="n_selected">%1$d ක් තෝරා ඇත</string>
+    <string name="select_all">සියල්ල තෝරන්න</string>
+    <string name="delete_docs_title">ලේඛන %1$d ක් මකන්නද?</string>
+    <string name="delete_docs_msg">ලේඛන %1$d ක් ස්ථිරවම මැකෙනු ඇත.</string>
+    <string name="delete_page_title">%1$d වන පිටුව මකන්නද?</string>
+    <string name="delete_page_msg">මෙම පිටුව ස්කෑන් එකෙන් ඉවත් කෙරේ.</string>
+    <string name="delete_last_page_msg">මෙය එකම පිටුවයි - සම්පූර්ණ ස්කෑන් එකම ඉවත් කෙරේ.</string>
     <string name="camera_perm">ලේඛන ස්කෑන් කිරීමට කැමරා අවසරය අවශ්‍යයි.</string>
     <string name="grant">අවසරය දෙන්න</string>
     <string name="camera_hint">ලේඛනය රාමුව තුළ තබන්න</string>

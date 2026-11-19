@@ -28,6 +28,13 @@
     <string name="done">Done</string>
     <string name="delete_doc_title">Delete document?</string>
     <string name="delete_doc_msg">%1$s will be permanently deleted.</string>
+    <string name="n_selected">%1$d selected</string>
+    <string name="select_all">Select all</string>
+    <string name="delete_docs_title">Delete %1$d documents?</string>
+    <string name="delete_docs_msg">%1$d documents will be permanently deleted.</string>
+    <string name="delete_page_title">Delete page %1$d?</string>
+    <string name="delete_page_msg">This page will be removed from the scan.</string>
+    <string name="delete_last_page_msg">This is the only page - the whole scan will be discarded.</string>
     <string name="camera_perm">Camera permission is needed to scan documents.</string>
     <string name="grant">Grant permission</string>
     <string name="camera_hint">Place the document inside the frame</string>
