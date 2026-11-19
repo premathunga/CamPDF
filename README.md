@@ -244,3 +244,23 @@ out with the shadow turned into a speckled yellow-green patch.
   page (no need to scroll the tool row to the end). The tool-row Delete still works.
 - Both ask "Delete page N?" first; deleting the only page warns that the whole scan will be discarded.
 - v3.4.2: the tool-row Delete moved from the end to 5th place (Add, Rotate, Crop, Filter, Delete, Sign, Left, Right).
+
+## v3.4.3 - small conveniences
+- Settings shows the real app version (read from the installed package) instead of a fixed "v1.0".
+- Review pages -> Filter: **Apply <filter> to all N pages** gives every page the current page's filter in one tap.
+- All Documents: **Sort** menu (newest / oldest, name A-Z / Z-A, largest / smallest), remembered.
+- **Share -> CamPDF** from WhatsApp, Gallery, Files...: shared images (one or several) open straight as a new scan
+  (auto edges -> crop -> review). Images only; the app still has no INTERNET permission.
+- Removed a stray `0001-v2.7.0-*.patch` file from the source folder.
+
+## v3.5.0 - Tools: ID card copy and PDF password
+- Home screen: a **Tools** row above the document list (icon + name tiles, scrolls sideways; more tools later).
+- **ID card**: scan the front, the camera comes back for the back side, then both are placed on one A4 page at the
+  real card size (ISO ID-1, 85.6 x 54 mm; portrait cards stay portrait), like an office photocopy. Pages keep their
+  colours (Enhance filter). Print at 100% / actual size. More than two sides -> two per A4 sheet.
+  (`IdCard.kt`; `PdfPage.exactA4` writes the sheet without the A4 safety margin so the size stays exact.)
+- **Password** (Tools row, a document's menu, or the PDF-created screen): makes an **AES-256** locked copy
+  (PDF 2.0 security handler V5/R6) to share or save; the original stays unlocked inside CamPDF. Own code
+  (`PdfCrypt.kt`) using only the platform's AES / SHA-2; the password is never stored. Locked copies are deleted
+  the next time the app starts. Checked with qpdf, poppler and pypdf (`tools/jvmtest/CryptTest.kt`), including a
+  Sinhala password.

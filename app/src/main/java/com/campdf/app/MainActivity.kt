@@ -1,5 +1,7 @@
 package com.campdf.app
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -56,6 +58,7 @@ class MainActivity : AppCompatActivity() {
             val can = BiometricManager.from(this).canAuthenticate(authenticators()) == BiometricManager.BIOMETRIC_SUCCESS
             locked = can
         }
+        if (savedInstanceState == null) handleShare(intent)
 
         setContent {
             val dark = when (vm.themeMode) {
@@ -78,6 +81,32 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleShare(intent)
+    }
+
+    /** v3.4.3: images sent with "Share -> CamPDF" open straight as a new scan. */
+    @Suppress("DEPRECATION")
+    private fun handleShare(intent: Intent?) {
+        if (intent == null) return
+        val uris = ArrayList<Uri>()
+        when (intent.action) {
+            Intent.ACTION_SEND -> (intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))?.let { uris.add(it) }
+            Intent.ACTION_SEND_MULTIPLE -> intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.let { uris.addAll(it) }
+            else -> return
+        }
+        if (uris.isEmpty()) {
+            val clip = intent.clipData
+            if (clip != null) for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { uris.add(it) }
+        }
+        // only content:// images from the sending app; never file paths from other apps
+        val ok = uris.filter { it.scheme == "content" }.distinct()
+        if (ok.isNotEmpty()) vm.importShared(ok)
+        intent.action = null // handled: not again after rotation / recreation
     }
 
     private fun promptUnlock() {

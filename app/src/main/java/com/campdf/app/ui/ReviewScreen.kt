@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.rounded.AutoFixHigh
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Crop
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.RotateRight
@@ -81,6 +83,20 @@ fun ReviewScreen(vm: AppViewModel) {
             )
         }
 
+        if (vm.idMode) {
+            // v3.5: what the ID card PDF will look like
+            Text(
+                stringResource(R.string.id_banner),
+                color = c.onPrimaryContainer,
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(c.primaryContainer)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
+        }
         Box(
             Modifier
                 .weight(1f)
@@ -120,6 +136,18 @@ fun ReviewScreen(vm: AppViewModel) {
             }
         }
 
+        if (filterOpen && page != null && pages.size > 1) {
+            // v3.4.3: one tap gives all pages the filter chosen for this page
+            TextButton(
+                onClick = { vm.applyFilterToAll() },
+                enabled = pages.any { it.filter != page.filter },
+                modifier = Modifier.padding(start = 12.dp)
+            ) {
+                Icon(Icons.Rounded.DoneAll, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.apply_filter_all, filterLabel(page.filter), pages.size))
+            }
+        }
         if (filterOpen && page != null) {
             LazyRow(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),

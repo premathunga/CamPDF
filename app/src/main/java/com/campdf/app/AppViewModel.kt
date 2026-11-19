@@ -35,6 +35,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     val cropQueue = mutableStateListOf<String>()
     var cropEditIndex by mutableStateOf<Int?>(null)
     private var fromCamera = false
+    /** v3.5: ID card session - pages are card sides, the PDF puts two per A4 sheet at real size. */
+    var idMode by mutableStateOf(false)
 
     // library
     var docs by mutableStateOf<List<DocItem>>(emptyList())
@@ -56,11 +58,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var autoCapture by mutableStateOf(prefs.autoCapture)
     var removeFingers by mutableStateOf(prefs.removeFingers)
     var appLock by mutableStateOf(prefs.appLock)
+    var sortMode by mutableIntStateOf(prefs.sortMode)
 
     private var idCounter = System.currentTimeMillis()
 
     init {
         Imaging.removeFingers = prefs.removeFingers
+        // v3.5: password-locked copies are only kept until the next start (they were shared / saved already)
+        viewModelScope.launch(Dispatchers.IO) { lockedDir().listFiles()?.forEach { it.delete() } }
         refreshDocs()
         // v3.0: optional page-finding network (assets/pagenet.bin, trained with tools/ml). Without the file the
         // app works exactly as before (straight-edge detection only).
@@ -185,6 +190,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         screen = Screen.Camera
     }
 
+    /** v3.5 Tools -> ID card: scan the front, then the back; both go on one A4 sheet at real size. */
+    fun startIdCard() {
+        clearSession()
+        idMode = true
+        screen = Screen.Camera
+    }
+
     fun onCaptured(path: String) {
         fromCamera = true
         cropEditIndex = null
@@ -264,11 +276,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 cropEditIndex = null
                 screen = Screen.Review
             } else {
-                pages.add(PageItem(id, raw, basePath, corners))
+                // ID cards keep their colours (photo, emblem): Enhance instead of the paper-whitening Magic
+                pages.add(PageItem(id, raw, basePath, corners, filter = if (idMode) FilterMode.ENHANCE else FilterMode.MAGIC))
                 if (cropQueue.isNotEmpty()) cropQueue.removeAt(0)
                 if (cropQueue.isEmpty()) {
                     selected = pages.lastIndex
-                    screen = Screen.Review
+                    if (idMode && pages.size == 1 && fromCamera) {
+                        // front done -> straight back to the camera for the back side
+                        message = getApplication<Application>().getString(R.string.id_scan_back)
+                        screen = Screen.Camera
+                    } else {
+                        screen = Screen.Review
+                    }
                 }
             }
         }
@@ -284,6 +303,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setFilter(mode: FilterMode) {
         val i = selected
         pages.getOrNull(i)?.let { pages[i] = it.copy(filter = mode) }
+    }
+
+    /** v3.4.3: gives every page of the scan the filter of the current page (one tap for a 10-page document). */
+    fun applyFilterToAll() {
+        val mode = pages.getOrNull(selected)?.filter ?: return
+        for (i in pages.indices) if (pages[i].filter != mode) pages[i] = pages[i].copy(filter = mode)
+        message = getApplication<Application>().getString(R.string.filter_applied_all, pages.size)
     }
 
     fun deleteSelected() {
@@ -366,6 +392,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             1 -> 3000 to 92
             else -> 2000 to 82
         }
+        if (idMode) {
+            // v3.5: two card sides per A4 sheet, true size (300 / 250 / 200 dpi by quality)
+            val dpi = when (quality) { 0 -> 300; 1 -> 250; else -> 200 }
+            val sheets = list.chunked(2)
+            PdfWriter.write(target, sheets.size) { i ->
+                val bm = IdCard.sheet(sheets[i], dpi) ?: error("render")
+                try {
+                    PdfPage(Imaging.toJpeg(bm, jpegQuality), bm.width, bm.height, exactA4 = true)
+                } finally {
+                    bm.recycle()
+                }
+            }
+            return
+        }
         PdfWriter.write(target, list.size) { i ->
             val bm = Imaging.pageBitmap(list[i], maxDim) ?: error("render")
             try {
@@ -402,12 +442,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             busy = true
             val doc = withContext(Dispatchers.IO) {
                 runCatching {
-                    val file = editing?.file ?: repo.newFile(repo.defaultName())
+                    val file = editing?.file ?: repo.newFile(if (idMode) "ID_" + repo.defaultName().removePrefix("Scan_") else repo.defaultName())
                     writePdfSafely(file, snapshot, quality)
-                    val thumbBitmap = Imaging.pageBitmap(snapshot[0], 360)
-                    try { repo.writeMeta(file, snapshot.size, thumbBitmap) } finally { thumbBitmap?.recycle() }
+                    val nPages = if (idMode) (snapshot.size + 1) / 2 else snapshot.size
+                    val thumbBitmap = if (idMode) IdCard.sheet(snapshot.take(2), 40) else Imaging.pageBitmap(snapshot[0], 360)
+                    try { repo.writeMeta(file, nPages, thumbBitmap) } finally { thumbBitmap?.recycle() }
                     DocItem(
-                        file, file.nameWithoutExtension, snapshot.size, file.length(), file.lastModified(),
+                        file, file.nameWithoutExtension, nPages, file.length(), file.lastModified(),
                         File(repo.dir, file.name + ".jpg").takeIf { it.exists() }
                     )
                 }.getOrNull()
@@ -418,6 +459,32 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             exported = doc
             screen = Screen.Export
             refreshDocs()
+        }
+    }
+
+    // ---------- v3.5 password lock ----------
+
+    private fun lockedDir() = File(getApplication<Application>().filesDir, "locked").apply { mkdirs() }
+
+    /**
+     * Makes an AES-256 password-locked copy of [doc] (the original in CamPDF stays unlocked) and hands it to
+     * [then] on the main thread - to share it or save it to the phone. The password is not stored anywhere.
+     */
+    fun lockPdf(doc: DocItem, password: String, then: (File) -> Unit) {
+        viewModelScope.launch {
+            busy = true
+            val f = withContext(Dispatchers.IO) {
+                runCatching {
+                    val dir = lockedDir()
+                    dir.listFiles()?.forEach { it.delete() }
+                    val dst = File(dir, doc.file.name)
+                    PdfCrypt.lock(doc.file, dst, password)
+                    dst
+                }.getOrNull()
+            }
+            busy = false
+            if (f == null) { message = err(); return@launch }
+            then(f)
         }
     }
 
@@ -464,6 +531,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun clearSession() {
+        idMode = false
         pages.clear()
         cropQueue.clear()
         cropEditIndex = null
@@ -486,4 +554,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         Imaging.removeFingers = v
     }
     fun updateAppLock(v: Boolean) { appLock = v; prefs.appLock = v }
+    fun updateSortMode(v: Int) { sortMode = v; prefs.sortMode = v }
+
+    /** v3.4.3: the document list in the order chosen on the home screen. */
+    fun sortedDocs(list: List<DocItem>): List<DocItem> = when (sortMode) {
+        1 -> list.sortedBy { it.modified }
+        2 -> list.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+        3 -> list.sortedWith(compareByDescending(String.CASE_INSENSITIVE_ORDER) { it.name })
+        4 -> list.sortedByDescending { it.size }
+        5 -> list.sortedBy { it.size }
+        else -> list.sortedByDescending { it.modified }
+    }
+
+    /**
+     * v3.4.3: images shared to CamPDF from another app (WhatsApp, Gallery, Files: "Share -> CamPDF").
+     * They go through the normal import (auto edge detection -> crop -> review) as a new scan.
+     */
+    fun importShared(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        if (!prefs.welcomeSeen) prefs.welcomeSeen = true
+        clearSession()
+        screen = Screen.Home
+        importUris(uris)
+    }
 }

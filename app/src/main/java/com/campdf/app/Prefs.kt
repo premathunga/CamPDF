@@ -33,6 +33,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("remove_fingers", true)
         set(v) { sp.edit().putBoolean("remove_fingers", v).apply() }
 
+    /** v3.4.3 document list order: 0 = newest, 1 = oldest, 2 = name A-Z, 3 = name Z-A, 4 = largest, 5 = smallest */
+    var sortMode: Int
+        get() = sp.getInt("sort_mode", 0)
+        set(v) { sp.edit().putInt("sort_mode", v).apply() }
+
     var appLock: Boolean
         get() = sp.getBoolean("app_lock", false)
         set(v) { sp.edit().putBoolean("app_lock", v).apply() }

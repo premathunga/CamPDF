@@ -388,8 +388,9 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
                 autoCapture -> R.string.hint_hold_steady
                 else -> R.string.hint_page_found
             }
+            val idSide = if (vm.idMode) stringResource(if (vm.pages.isEmpty()) R.string.id_front else R.string.id_back) + "  ·  " else ""
             Text(
-                stringResource(hint),
+                idSide + stringResource(hint),
                 color = Color.White,
                 fontSize = 13.sp,
                 modifier = Modifier

@@ -116,7 +116,7 @@ fun SettingsScreen(vm: AppViewModel) {
             }
 
             Text(
-                stringResource(R.string.about),
+                stringResource(R.string.about, appVersion(ctx)),
                 color = c.onSurfaceVariant,
                 fontSize = 12.sp,
                 textAlign = TextAlign.Center,
@@ -195,3 +195,8 @@ private fun SwitchRow(title: String, desc: String, checked: Boolean, onChange: (
         Switch(checked = checked, onCheckedChange = onChange)
     }
 }
+
+/** v3.4.3: the real version from the installed package (build.gradle.kts versionName), e.g. "3.4.3". */
+private fun appVersion(ctx: android.content.Context): String = runCatching {
+    ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
+}.getOrNull() ?: "?"

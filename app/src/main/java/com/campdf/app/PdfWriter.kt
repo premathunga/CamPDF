@@ -8,7 +8,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-class PdfPage(val jpeg: ByteArray, val width: Int, val height: Int)
+/** exactA4 (v3.5): the image already is a full A4 sheet at true scale (ID card copy) - no snapping margin. */
+class PdfPage(val jpeg: ByteArray, val width: Int, val height: Int, val exactA4: Boolean = false)
 
 /**
  * Minimal PDF 1.4 writer: one JPEG image per page (DCTDecode), so files stay small
@@ -54,7 +55,7 @@ object PdfWriter {
                             else p.width.toFloat() / p.height.coerceAtLeast(1)
                 // Snap pages within standard A4 aspect tolerance (~6% of 1.414) to standard ISO A4 points.
                 // Arbitrary documents (receipts, cards) keep their proportional bounds.
-                if (ratio in 1.28f..1.56f) {
+                if (p.exactA4 || ratio in 1.28f..1.56f) {
                     if (isPortrait) {
                         pw = a4W
                         ph = a4H
@@ -85,7 +86,7 @@ object PdfWriter {
                 // scan's real proportions by a few percent -> letterbox instead of stretching).
                 // A subtle safe margin (~12 pt / 4mm) on standard A4 pages prevents physical printers
                 // from cutting off document header/footer text.
-                val margin = if (ratio in 1.28f..1.56f) 12f else 0f
+                val margin = if (!p.exactA4 && ratio in 1.28f..1.56f) 12f else 0f
                 val targetW = pw - margin * 2f
                 val targetH = ph - margin * 2f
                 val imgAspect = p.width.toFloat() / p.height.coerceAtLeast(1)

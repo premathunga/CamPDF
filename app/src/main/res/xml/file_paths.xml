@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <files-path name="docs" path="docs/" />
+    <!-- v3.5: password-locked copies made for sharing / saving (cleared when the app starts) -->
+    <files-path name="locked" path="locked/" />
 </paths>

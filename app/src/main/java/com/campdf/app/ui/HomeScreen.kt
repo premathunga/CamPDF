@@ -1,6 +1,7 @@
 package com.campdf.app.ui
 
 import android.text.format.Formatter
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -24,12 +25,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.MoreVert
@@ -94,7 +98,11 @@ fun HomeScreen(vm: AppViewModel) {
         if (uris.isNotEmpty()) vm.importUris(uris)
     }
 
-    val all = vm.docs
+    val all = vm.sortedDocs(vm.docs)
+    var sortMenu by remember { mutableStateOf(false) }
+    // v3.5 tools: password lock (document chosen from the Tools row or from a document's menu)
+    var pickForLock by remember { mutableStateOf(false) }
+    var lockDoc by remember { mutableStateOf<DocItem?>(null) }
     val list = if (query.isBlank()) all else all.filter { it.name.contains(query, ignoreCase = true) }
     // forget selections of documents that no longer exist (deleted / renamed)
     LaunchedEffect(all) { val names = all.map { it.file.name }.toSet(); selected.retainAll { it in names } }
@@ -139,6 +147,32 @@ fun HomeScreen(vm: AppViewModel) {
                     color = c.onBackground,
                     modifier = Modifier.weight(1f)
                 )
+                // v3.4.3: sort the list by date / name / size (remembered)
+                Box {
+                    IconButton(onClick = { sortMenu = true }) {
+                        Icon(Icons.AutoMirrored.Rounded.Sort, stringResource(R.string.sort_by), tint = c.onSurface)
+                    }
+                    DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+                        listOf(
+                            R.string.sort_newest, R.string.sort_oldest, R.string.sort_name_az,
+                            R.string.sort_name_za, R.string.sort_largest, R.string.sort_smallest
+                        ).forEachIndexed { i, label ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        stringResource(label),
+                                        color = if (vm.sortMode == i) c.primary else c.onSurface,
+                                        fontWeight = if (vm.sortMode == i) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                },
+                                trailingIcon = {
+                                    if (vm.sortMode == i) Icon(Icons.Rounded.Check, null, tint = c.primary)
+                                },
+                                onClick = { vm.updateSortMode(i); sortMenu = false }
+                            )
+                        }
+                    }
+                }
                 IconButton(onClick = { vm.screen = Screen.Settings }) {
                     Icon(Icons.Rounded.Settings, null, tint = c.onSurface)
                 }
@@ -158,6 +192,13 @@ fun HomeScreen(vm: AppViewModel) {
                 ),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
             )
+            if (!selecting) {
+                ToolsRow(standardTools(vm) {
+                    if (all.isEmpty()) Toast.makeText(ctx, R.string.empty_title, Toast.LENGTH_SHORT).show()
+                    else pickForLock = true
+                })
+                Spacer(Modifier.height(4.dp))
+            }
             if (list.isEmpty()) {
                 Column(
                     Modifier.fillMaxSize().padding(32.dp),
@@ -195,6 +236,7 @@ fun HomeScreen(vm: AppViewModel) {
                             onOpen = { if (selecting) toggle(doc) else vm.openViewer(doc) },
                             onEdit = { vm.editDoc(doc) },
                             onShare = { sharePdf(ctx, vm, doc.file) },
+                            onLock = { lockDoc = doc },
                             onRename = { renameDoc = doc },
                             onDelete = { deleteDoc = doc }
                         )
@@ -265,6 +307,11 @@ fun HomeScreen(vm: AppViewModel) {
         )
     }
 
+    if (pickForLock) {
+        DocPickerDialog(all, onPick = { pickForLock = false; lockDoc = it }, onDismiss = { pickForLock = false })
+    }
+    LockPdfHost(vm, lockDoc) { lockDoc = null }
+
     deleteDoc?.let { doc ->
         AlertDialog(
             onDismissRequest = { deleteDoc = null },
@@ -291,6 +338,7 @@ private fun DocRow(
     onToggle: () -> Unit,
     onOpen: () -> Unit,
     onShare: () -> Unit,
+    onLock: () -> Unit,
     onEdit: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit
@@ -355,6 +403,11 @@ private fun DocRow(
                         text = { Text(stringResource(R.string.share)) },
                         leadingIcon = { Icon(Icons.Rounded.Share, null) },
                         onClick = { menu = false; onShare() }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.lock_title)) },
+                        leadingIcon = { Icon(Icons.Rounded.Lock, null) },
+                        onClick = { menu = false; onLock() }
                     )
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.edit_pages)) },

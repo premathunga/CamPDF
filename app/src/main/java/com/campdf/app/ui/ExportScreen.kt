@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Save
@@ -63,6 +64,8 @@ fun ExportScreen(vm: AppViewModel) {
     val scope = rememberCoroutineScope()
     var name by remember(doc.file.name) { mutableStateOf(doc.name) }
     val thumb by rememberFileImage(doc.thumb, 400)
+    var lockOpen by remember { mutableStateOf(false) }
+    LockPdfHost(vm, if (lockOpen) doc else null) { lockOpen = false }
 
     val saver = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         if (uri != null) {
@@ -168,6 +171,13 @@ fun ExportScreen(vm: AppViewModel) {
                 Modifier.fillMaxWidth(),
                 icon = Icons.Rounded.OpenInNew
             ) { openPdf(ctx, vm, doc.file) }
+            Spacer(Modifier.height(12.dp))
+            // v3.5: share / save a password-locked copy
+            SecondaryButton(
+                stringResource(R.string.lock_title),
+                Modifier.fillMaxWidth(),
+                icon = Icons.Rounded.Lock
+            ) { lockOpen = true }
             Spacer(Modifier.height(16.dp))
         }
         PrimaryButton(
