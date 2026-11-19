@@ -305,3 +305,10 @@ Tools -> ID card now opens an ID copy screen first:
 - **"For ... only" watermark**: the purpose the user types + today's date ("For bank account opening only ·
   19/11/2026"), repeated diagonally across each copy in grey, in Sinhala / English / Tamil (follows the app
   language). On by default; kind, switch and last purpose are remembered.
+
+## v3.8.0 - tools grid, Tools page, checkboxes, print
+- Home: tools in two rows of four - the first seven tools and **All**, which opens a **Tools page** with every
+  tool grouped (Scan & import, Convert, Edit, Utilities).
+- Document list: a **checkbox is always shown** on each document - tap it to start selecting (long-press still works).
+- **Print** added to a document's menu and to the selection bar (several selected documents are joined losslessly
+  into one temporary file and printed as one job).

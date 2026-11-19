@@ -188,4 +188,9 @@
     <string name="id_banner_passport">Passport: the photo page goes on an A4 page at real size (125 × 88 mm). Print at 100% / actual size.</string>
     <string name="id_banner_cert">Certificate: the whole document is fitted to an A4 page.</string>
     <string name="id_banner_wm">Watermark: \"%1$s\"</string>
+    <string name="tools_all">All</string>
+    <string name="sec_scan">Scan &amp; import</string>
+    <string name="sec_convert">Convert</string>
+    <string name="sec_edit">Edit</string>
+    <string name="sec_util">Utilities</string>
 </resources>

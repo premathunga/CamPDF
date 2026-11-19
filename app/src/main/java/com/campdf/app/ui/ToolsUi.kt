@@ -26,19 +26,22 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.twotone.AddPhotoAlternate
+import androidx.compose.material.icons.twotone.Apps
 import androidx.compose.material.icons.twotone.Badge
 import androidx.compose.material.icons.twotone.Collections
 import androidx.compose.material.icons.twotone.ContentCut
@@ -96,7 +99,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 
 /** One tool of the home screen's Tools row; [color] = the tool's own accent (icon + tinted circle). */
-class ToolItem(val icon: ImageVector, val label: Int, val color: Color, val onClick: () -> Unit)
+class ToolItem(val icon: ImageVector, val label: Int, val color: Color, val section: Int = R.string.sec_edit, val onClick: () -> Unit)
 
 /**
  * v3.5.2 tool accents: one colour per tool, readable on the dark and the light theme. The icon is drawn in the
@@ -111,14 +114,63 @@ object ToolColors {
     val Amber = Color(0xFFF5B83D)
     val Violet = Color(0xFF9B7BF7)
     val Sky = Color(0xFF29B6F6)
+    val Slate = Color(0xFF8FA3BF)
+}
+
+/** One tool: round badge tinted with the tool's colour (soft ring around it), name below (up to two lines). */
+@Composable
+fun ToolTile(t: ToolItem, modifier: Modifier = Modifier) {
+    val c = MaterialTheme.colorScheme
+    Column(
+        modifier
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = t.onClick)
+            .padding(vertical = 6.dp, horizontal = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            Modifier
+                .size(54.dp)
+                .clip(CircleShape)
+                .background(t.color.copy(alpha = 0.16f))
+                .border(1.dp, t.color.copy(alpha = 0.22f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(t.icon, null, tint = t.color, modifier = Modifier.size(27.dp))
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            stringResource(t.label),
+            fontSize = 12.sp,
+            lineHeight = 14.sp,
+            color = c.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.height(30.dp)
+        )
+    }
+}
+
+/** Tiles in rows of [cols] equal columns (the last row is left-aligned). */
+@Composable
+private fun ToolRows(tools: List<ToolItem>, cols: Int = 4) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+        tools.chunked(cols).forEach { row ->
+            Row(Modifier.fillMaxWidth()) {
+                row.forEach { ToolTile(it, Modifier.weight(1f)) }
+                repeat(cols - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
 }
 
 /**
- * v3.5 Tools row on the home screen: icon + name tiles in one line that scrolls sideways,
- * so more tools can be added later without taking more room from the document list.
+ * v3.8 home screen tools: two rows of four, like CamScanner - the first seven tools and "All", which opens the
+ * Tools page with every tool.
  */
 @Composable
-fun ToolsRow(tools: List<ToolItem>) {
+fun ToolsGrid(tools: List<ToolItem>, onAll: () -> Unit) {
     val c = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth()) {
         Text(
@@ -126,42 +178,33 @@ fun ToolsRow(tools: List<ToolItem>) {
             color = c.onSurfaceVariant,
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(start = 20.dp, top = 2.dp, bottom = 6.dp)
+            modifier = Modifier.padding(start = 20.dp, top = 2.dp, bottom = 4.dp)
         )
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            items(tools) { t ->
-                Column(
-                    Modifier
-                        .width(78.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .clickable(onClick = t.onClick)
-                        .padding(vertical = 6.dp, horizontal = 2.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    // round badge tinted with the tool's colour, a soft ring of the same colour around it
-                    Box(
-                        Modifier
-                            .size(56.dp)
-                            .clip(CircleShape)
-                            .background(t.color.copy(alpha = 0.16f))
-                            .border(1.dp, t.color.copy(alpha = 0.22f), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(t.icon, null, tint = t.color, modifier = Modifier.size(28.dp))
-                    }
-                    Spacer(Modifier.height(6.dp))
+        val shown = if (tools.size <= 8) tools
+            else tools.take(7) + ToolItem(Icons.TwoTone.Apps, R.string.tools_all, ToolColors.Slate, onClick = onAll)
+        ToolRows(shown)
+    }
+}
+
+/** v3.8 Tools page: every tool, grouped. */
+@Composable
+fun ToolsScreen(vm: AppViewModel) {
+    val c = MaterialTheme.colorScheme
+    val tools = rememberTools(vm, vm.sortedDocs(vm.docs))
+    Column(Modifier.fillMaxSize().background(c.background)) {
+        ScreenTopBar(stringResource(R.string.tools), onBack = { vm.onBack() })
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+            listOf(R.string.sec_scan, R.string.sec_convert, R.string.sec_edit, R.string.sec_util).forEach { sec ->
+                val group = tools.filter { it.section == sec }
+                if (group.isNotEmpty()) {
                     Text(
-                        stringResource(t.label),
-                        fontSize = 12.sp,
-                        lineHeight = 14.sp,
-                        color = c.onSurface,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center
+                        stringResource(sec),
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = c.onBackground,
+                        modifier = Modifier.padding(start = 20.dp, top = 14.dp, bottom = 6.dp)
                     )
+                    ToolRows(group)
                 }
             }
         }
@@ -177,8 +220,11 @@ private enum class DocAction { SIGN, LOCK, EXTRACT, REORDER, COMPRESS, PRINT, IM
  * picker, merge picker, compress options, images ready) - call it once from the screen.
  */
 @Composable
-fun rememberTools(vm: AppViewModel, docs: List<DocItem>, onImportImages: () -> Unit): List<ToolItem> {
+fun rememberTools(vm: AppViewModel, docs: List<DocItem>): List<ToolItem> {
     val ctx = LocalContext.current
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+        if (uris.isNotEmpty()) vm.importUris(uris)
+    }
     var action by remember { mutableStateOf<DocAction?>(null) }
     var mergeOpen by remember { mutableStateOf(false) }
     var lockDoc by remember { mutableStateOf<DocItem?>(null) }
@@ -214,10 +260,10 @@ fun rememberTools(vm: AppViewModel, docs: List<DocItem>, onImportImages: () -> U
     LockPdfHost(vm, lockDoc) { lockDoc = null }
 
     return listOf(
-        ToolItem(Icons.TwoTone.Badge, R.string.tool_id_card, ToolColors.Teal) { vm.startIdCard() },
-        ToolItem(Icons.TwoTone.AddPhotoAlternate, R.string.tool_import_images, ToolColors.Sky, onImportImages),
-        ToolItem(Icons.TwoTone.FolderOpen, R.string.tool_import_files, ToolColors.Blue) { pdfPicker.launch(arrayOf("application/pdf")) },
-        ToolItem(Icons.TwoTone.Collections, R.string.tool_pdf_images, ToolColors.Teal) { needDocs(DocAction.IMAGES) },
+        ToolItem(Icons.TwoTone.Badge, R.string.tool_id_card, ToolColors.Teal, R.string.sec_scan) { vm.startIdCard() },
+        ToolItem(Icons.TwoTone.AddPhotoAlternate, R.string.tool_import_images, ToolColors.Sky, R.string.sec_scan) { imagePicker.launch("image/*") },
+        ToolItem(Icons.TwoTone.FolderOpen, R.string.tool_import_files, ToolColors.Blue, R.string.sec_scan) { pdfPicker.launch(arrayOf("application/pdf")) },
+        ToolItem(Icons.TwoTone.Collections, R.string.tool_pdf_images, ToolColors.Teal, R.string.sec_convert) { needDocs(DocAction.IMAGES) },
         ToolItem(Icons.TwoTone.Gesture, R.string.tool_sign, ToolColors.Green) { needDocs(DocAction.SIGN) },
         ToolItem(Icons.TwoTone.FileCopy, R.string.tool_merge, ToolColors.Blue) {
             if (docs.size < 2) Toast.makeText(ctx, R.string.merge_need_two, Toast.LENGTH_SHORT).show() else mergeOpen = true
@@ -226,7 +272,7 @@ fun rememberTools(vm: AppViewModel, docs: List<DocItem>, onImportImages: () -> U
         ToolItem(Icons.TwoTone.SwapVert, R.string.tool_reorder, ToolColors.Blue) { needDocs(DocAction.REORDER) },
         ToolItem(Icons.TwoTone.Lock, R.string.tool_password, ToolColors.Green) { needDocs(DocAction.LOCK) },
         ToolItem(Icons.TwoTone.UnfoldLess, R.string.tool_compress, ToolColors.Amber) { needDocs(DocAction.COMPRESS) },
-        ToolItem(Icons.TwoTone.Print, R.string.tool_print, ToolColors.Coral) { needDocs(DocAction.PRINT) }
+        ToolItem(Icons.TwoTone.Print, R.string.tool_print, ToolColors.Coral, R.string.sec_util) { needDocs(DocAction.PRINT) }
     )
 }
 

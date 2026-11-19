@@ -187,4 +187,9 @@
     <string name="id_banner_passport">கடவுச்சீட்டு: புகைப்படப் பக்கம் A4 பக்கத்தில் உண்மையான அளவில் (125 × 88 mm). 100% / Actual size இல் அச்சிடவும்.</string>
     <string name="id_banner_cert">சான்றிதழ்: முழு ஆவணமும் A4 பக்கத்திற்கு பொருத்தப்படும்.</string>
     <string name="id_banner_wm">நீர்க்குறி: \"%1$s\"</string>
+    <string name="tools_all">அனைத்தும்</string>
+    <string name="sec_scan">ஸ்கேன் &amp; இறக்குமதி</string>
+    <string name="sec_convert">மாற்று</string>
+    <string name="sec_edit">திருத்து</string>
+    <string name="sec_util">பயன்பாடுகள்</string>
 </resources>

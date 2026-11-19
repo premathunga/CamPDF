@@ -153,6 +153,7 @@ private fun Root(vm: AppViewModel) {
             Screen.Settings -> SettingsScreen(vm)
             Screen.PageTool -> com.campdf.app.ui.PageToolScreen(vm)
             Screen.IdIntro -> com.campdf.app.ui.IdIntroScreen(vm)
+            Screen.Tools -> com.campdf.app.ui.ToolsScreen(vm)
         }
         if (vm.busy) {
             Box(

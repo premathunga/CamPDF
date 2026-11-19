@@ -110,6 +110,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             Screen.Settings -> screen = Screen.Home
             Screen.PageTool -> { pageTool = null; screen = Screen.Home }
             Screen.IdIntro -> screen = Screen.Home
+            Screen.Tools -> screen = Screen.Home
             else -> Unit
         }
     }
@@ -230,7 +231,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun importUris(uris: List<Uri>) {
-        if (screen == Screen.Home) clearSession()
+        if (screen == Screen.Home || screen == Screen.Tools) clearSession()
         viewModelScope.launch {
             busy = true
             val files = withContext(Dispatchers.IO) {
@@ -687,6 +688,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 File(dir, "${base}_${i + 1}.jpg").also { it.writeBytes(p.jpeg) }
             }
         }, then)
+    }
+
+    /**
+     * v3.8 Print from the list: one document is printed as it is; several are joined (losslessly) into one
+     * temporary file so they go to the printer as one job. [then] gets the file and a job name.
+     */
+    fun printDocs(list: List<DocItem>, then: (File, String) -> Unit) {
+        if (list.isEmpty()) return
+        if (list.size == 1) { then(list[0].file, list[0].name); return }
+        tool({
+            val f = File(cache, "CamPDF_print.pdf")
+            val all = list.flatMap { loadPages(it.file) }
+            PdfWriter.write(f, all.size) { all[it] }
+            f
+        }) { f -> then(f, "CamPDF (${list.size})") }
     }
 
     /** Tools -> Sign: opens the document's pages for editing and goes straight to the signature. */

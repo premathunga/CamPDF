@@ -27,9 +27,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.CheckBox
+import androidx.compose.material.icons.rounded.CheckBoxOutlineBlank
+import androidx.compose.material.icons.rounded.Print
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.FileCopy
@@ -103,7 +104,7 @@ fun HomeScreen(vm: AppViewModel) {
     // v3.5 tools: password lock (document chosen from the Tools row or from a document's menu)
     var lockDoc by remember { mutableStateOf<DocItem?>(null) }
     // v3.6: all tools (and the dialogs they need)
-    val tools = rememberTools(vm, all, onImportImages = { picker.launch("image/*") })
+    val tools = rememberTools(vm, all)
     val list = if (query.isBlank()) all else all.filter { it.name.contains(query, ignoreCase = true) }
     // forget selections of documents that no longer exist (deleted / renamed)
     LaunchedEffect(all) { val names = all.map { it.file.name }.toSet(); selected.retainAll { it in names } }
@@ -134,6 +135,10 @@ fun HomeScreen(vm: AppViewModel) {
                         IconButton(onClick = { vm.mergeDocs(selectedDocs); selected.clear() }) {
                             Icon(Icons.Rounded.FileCopy, stringResource(R.string.tool_merge), tint = c.onSurface)
                         }
+                    }
+                    // v3.8: print the selected documents (several are printed as one job)
+                    IconButton(onClick = { vm.printDocs(selectedDocs) { f, name -> printPdf(ctx, f, name) } }) {
+                        Icon(Icons.Rounded.Print, stringResource(R.string.tool_print), tint = c.onSurface)
                     }
                     IconButton(onClick = { sharePdfs(ctx, vm, selectedDocs.map { it.file }) }) {
                         Icon(Icons.Rounded.Share, stringResource(R.string.share), tint = c.primary)
@@ -200,7 +205,7 @@ fun HomeScreen(vm: AppViewModel) {
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
             )
             if (!selecting) {
-                ToolsRow(tools)
+                ToolsGrid(tools) { vm.screen = Screen.Tools }
                 Spacer(Modifier.height(4.dp))
             }
             if (list.isEmpty()) {
@@ -241,6 +246,7 @@ fun HomeScreen(vm: AppViewModel) {
                             onEdit = { vm.editDoc(doc) },
                             onShare = { sharePdf(ctx, vm, doc.file) },
                             onLock = { lockDoc = doc },
+                            onPrint = { printPdf(ctx, doc.file, doc.name) },
                             onRename = { renameDoc = doc },
                             onDelete = { deleteDoc = doc }
                         )
@@ -340,6 +346,7 @@ private fun DocRow(
     onOpen: () -> Unit,
     onShare: () -> Unit,
     onLock: () -> Unit,
+    onPrint: () -> Unit,
     onEdit: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit
@@ -389,15 +396,15 @@ private fun DocRow(
                 Spacer(Modifier.height(4.dp))
                 Text(meta, color = c.onSurfaceVariant, fontSize = 12.sp, maxLines = 2)
             }
-            if (selecting) {
-                IconButton(onClick = onToggle) {
-                    Icon(
-                        if (isSelected) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked,
-                        null,
-                        tint = if (isSelected) c.primary else c.onSurfaceVariant
-                    )
-                }
-            } else Box {
+            // v3.8: the checkbox is always there - tap it to select (no need to know about long-press)
+            IconButton(onClick = onToggle) {
+                Icon(
+                    if (isSelected) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank,
+                    null,
+                    tint = if (isSelected) c.primary else c.onSurfaceVariant
+                )
+            }
+            if (!selecting) Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, null, tint = c.onSurfaceVariant) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(
@@ -409,6 +416,11 @@ private fun DocRow(
                         text = { Text(stringResource(R.string.lock_title)) },
                         leadingIcon = { Icon(Icons.Rounded.Lock, null) },
                         onClick = { menu = false; onLock() }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.tool_print)) },
+                        leadingIcon = { Icon(Icons.Rounded.Print, null) },
+                        onClick = { menu = false; onPrint() }
                     )
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.edit_pages)) },

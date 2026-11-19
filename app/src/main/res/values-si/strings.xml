@@ -187,4 +187,9 @@
     <string name="id_banner_passport">විදේශ ගමන් බලපත්‍රය: photo පිටුව A4 පිටුවක නියම ප්‍රමාණයෙන් (125 × 88 mm). Print කරන්නේ 100% / Actual size ලෙසයි.</string>
     <string name="id_banner_cert">සහතිකය: සම්පූර්ණ ලේඛනය A4 පිටුවකට ගැළපේ.</string>
     <string name="id_banner_wm">Watermark: \"%1$s\"</string>
+    <string name="tools_all">සියල්ල</string>
+    <string name="sec_scan">Scan සහ ඇතුළත් කිරීම</string>
+    <string name="sec_convert">පරිවර්තනය</string>
+    <string name="sec_edit">සංස්කරණය</string>
+    <string name="sec_util">වෙනත්</string>
 </resources>

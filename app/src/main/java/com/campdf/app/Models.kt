@@ -4,7 +4,7 @@ import java.io.File
 
 enum class FilterMode { ORIGINAL, LIGHTEN, ENHANCE, NO_SHADOW, BW, MAGIC }
 
-enum class Screen { Welcome, Home, Viewer, Camera, Crop, Review, SignPad, SignPlace, Export, Settings, PageTool, IdIntro }
+enum class Screen { Welcome, Home, Viewer, Camera, Crop, Review, SignPad, SignPlace, Export, Settings, PageTool, IdIntro, Tools }
 
 /** v3.6 page tools on a saved document: pick pages to extract, or tap pages in their new order. */
 enum class PageToolMode { EXTRACT, REORDER }
