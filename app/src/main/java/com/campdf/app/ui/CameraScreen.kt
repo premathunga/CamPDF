@@ -71,6 +71,8 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -81,6 +83,7 @@ import com.campdf.app.AppViewModel
 import com.campdf.app.DocDetect
 import com.campdf.app.LiveTracker
 import com.campdf.app.R
+import kotlinx.coroutines.delay
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -93,8 +96,12 @@ fun CameraScreen(vm: AppViewModel) {
         mutableStateOf(ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
+    // v3.5.1: while the photo picker is open the camera keeps running behind it (the picker is a sheet over this
+    // screen), so live detection is paused - before, auto-capture took whatever the camera saw meanwhile.
+    var galleryOpen by remember { mutableStateOf(false) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
-        if (uris.isNotEmpty()) vm.importUris(uris)
+        if (uris.isNotEmpty()) vm.importUris(uris) // stay paused: we are leaving the camera for the crop screen
+        else galleryOpen = false
     }
     LaunchedEffect(Unit) {
         if (!granted) permLauncher.launch(Manifest.permission.CAMERA)
@@ -102,7 +109,7 @@ fun CameraScreen(vm: AppViewModel) {
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (granted) {
-            CameraBody(vm, onGallery = { picker.launch("image/*") })
+            CameraBody(vm, galleryOpen, onGallery = { galleryOpen = true; picker.launch("image/*") })
         } else {
             Column(
                 Modifier.fillMaxSize().padding(32.dp),
@@ -120,7 +127,7 @@ fun CameraScreen(vm: AppViewModel) {
 }
 
 @Composable
-private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
+private fun CameraBody(vm: AppViewModel, galleryOpen: Boolean, onGallery: () -> Unit) {
     val ctx = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val haptic = LocalHapticFeedback.current
@@ -139,6 +146,7 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
     var liveQuad by remember { mutableStateOf<FloatArray?>(null) }
     var frameAspect by remember { mutableStateOf(3f / 4f) } // width / height of the upright analysis frame
     var steady by remember { mutableStateOf(0f) }
+    var pageLike by remember { mutableStateOf(false) }
     val tracker = remember { LiveTracker() }
     val paused = remember { AtomicBoolean(false) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor { r -> Thread(r, "CamPDF-live").apply { isDaemon = true } } }
@@ -188,12 +196,16 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
                                     val aspect = upright.width.toFloat() / upright.height
                                     // v3.3.1: fast network-only detection (~3x cheaper than the full detector)
                                     val q = runCatching { DocDetect.detectLive(upright) }.getOrNull()
+                                    val like = q != null && DocDetect.lastLiveAuto
                                     upright.recycle()
-                                    val st = tracker.update(q, SystemClock.elapsedRealtime())
+                                    val st = tracker.update(q, SystemClock.elapsedRealtime(), like)
                                     main.execute {
-                                        liveQuad = st.quad
-                                        steady = st.progress
-                                        frameAspect = aspect
+                                        if (!paused.get()) {
+                                            liveQuad = st.quad
+                                            steady = st.progress
+                                            pageLike = st.pageLike
+                                            frameAspect = aspect
+                                        }
                                     }
                                 }
                             } catch (_: Throwable) {
@@ -232,6 +244,31 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
 
     DisposableEffect(Unit) {
         onDispose { analysisExecutor.shutdown() }
+    }
+
+    // v3.5.1: no live detection / auto-capture while this screen is not in front (picker, another app, screen off)
+    // or while the picker is open; on return the steadiness starts from zero.
+    var resumed by remember { mutableStateOf(true) }
+    DisposableEffect(lifecycleOwner) {
+        val obs = LifecycleEventObserver { _, e ->
+            when (e) {
+                Lifecycle.Event.ON_PAUSE -> resumed = false
+                Lifecycle.Event.ON_RESUME -> resumed = true
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+    // the camera may only take a picture by itself 1.5 s after it opened (time to bring the page into view)
+    var openedAt by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
+    val active = resumed && !galleryOpen && !vm.busy
+    LaunchedEffect(active) {
+        if (!capturing) paused.set(!active)
+        tracker.reset()
+        steady = 0f
+        liveQuad = null
+        if (active) openedAt = SystemClock.elapsedRealtime()
     }
 
     // v2.8.0: the activity is locked to portrait, so without this every photo taken with the phone held
@@ -288,8 +325,12 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
 
     // auto-capture: the page has been held steady long enough
     val autoCapture = vm.autoCapture
-    LaunchedEffect(steady >= 1f, autoCapture) {
-        if (liveOn && autoCapture && steady >= 1f && !capturing && liveQuad != null) {
+    LaunchedEffect(steady >= 1f, autoCapture, pageLike, active) {
+        fun ok() = liveOn && autoCapture && steady >= 1f && !capturing && liveQuad != null && pageLike && active
+        if (!ok()) return@LaunchedEffect
+        val wait = 1500L - (SystemClock.elapsedRealtime() - openedAt)
+        if (wait > 0) delay(wait) // just opened: give the user a moment, then capture if still steady
+        if (ok()) {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             capture()
         }
@@ -385,10 +426,18 @@ private fun CameraBody(vm: AppViewModel, onGallery: () -> Unit) {
                 !liveOn -> R.string.camera_hint
                 capturing -> R.string.hint_capturing
                 q == null -> R.string.hint_searching
-                autoCapture -> R.string.hint_hold_steady
+                autoCapture && pageLike -> R.string.hint_hold_steady
                 else -> R.string.hint_page_found
             }
-            val idSide = if (vm.idMode) stringResource(if (vm.pages.isEmpty()) R.string.id_front else R.string.id_back) + "  ·  " else ""
+            val kind = vm.idKind
+            val idSide = when {
+                kind == null -> ""
+                kind.sides == 2 -> stringResource(
+                    R.string.id_side_fmt, stringResource(idKindLabel(kind)),
+                    stringResource(if (vm.pages.isEmpty()) R.string.id_side_front else R.string.id_side_back)
+                ) + "  ·  "
+                else -> stringResource(idKindLabel(kind)) + "  ·  "
+            }
             Text(
                 idSide + stringResource(hint),
                 color = Color.White,

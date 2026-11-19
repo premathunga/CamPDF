@@ -83,10 +83,19 @@ fun ReviewScreen(vm: AppViewModel) {
             )
         }
 
-        if (vm.idMode) {
-            // v3.5: what the ID card PDF will look like
+        val idKind = vm.idKind
+        if (idKind != null) {
+            // v3.5 / v3.7: what the ID copy PDF will look like
+            val base = stringResource(
+                when {
+                    idKind.fullPage -> R.string.id_banner_cert
+                    idKind.sides == 1 -> R.string.id_banner_passport
+                    else -> R.string.id_banner
+                }
+            )
+            val wm = vm.idWatermark
             Text(
-                stringResource(R.string.id_banner),
+                if (wm != null) base + "\n" + stringResource(R.string.id_banner_wm, wm) else base,
                 color = c.onPrimaryContainer,
                 fontSize = 12.sp,
                 modifier = Modifier

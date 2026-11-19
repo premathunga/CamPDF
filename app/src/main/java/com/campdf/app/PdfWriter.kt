@@ -8,8 +8,18 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** exactA4 (v3.5): the image already is a full A4 sheet at true scale (ID card copy) - no snapping margin. */
-class PdfPage(val jpeg: ByteArray, val width: Int, val height: Int, val exactA4: Boolean = false)
+/**
+ * exactA4 (v3.5): the image already is a full A4 sheet at true scale (ID card copy) - no snapping margin.
+ * box (v3.6): exact page geometry read back from an existing CamPDF file (PdfDoc) - page width, page height and the
+ * image rectangle x, y, w, h in points - so merged / extracted / reordered pages keep their exact layout.
+ */
+class PdfPage(
+    val jpeg: ByteArray,
+    val width: Int,
+    val height: Int,
+    val exactA4: Boolean = false,
+    val box: FloatArray? = null
+)
 
 /**
  * Minimal PDF 1.4 writer: one JPEG image per page (DCTDecode), so files stay small
@@ -55,7 +65,10 @@ object PdfWriter {
                             else p.width.toFloat() / p.height.coerceAtLeast(1)
                 // Snap pages within standard A4 aspect tolerance (~6% of 1.414) to standard ISO A4 points.
                 // Arbitrary documents (receipts, cards) keep their proportional bounds.
-                if (p.exactA4 || ratio in 1.28f..1.56f) {
+                if (p.box != null) {
+                    pw = p.box[0]
+                    ph = p.box[1]
+                } else if (p.exactA4 || ratio in 1.28f..1.56f) {
                     if (isPortrait) {
                         pw = a4W
                         ph = a4H
@@ -86,7 +99,7 @@ object PdfWriter {
                 // scan's real proportions by a few percent -> letterbox instead of stretching).
                 // A subtle safe margin (~12 pt / 4mm) on standard A4 pages prevents physical printers
                 // from cutting off document header/footer text.
-                val margin = if (!p.exactA4 && ratio in 1.28f..1.56f) 12f else 0f
+                val margin = if (p.box == null && !p.exactA4 && ratio in 1.28f..1.56f) 12f else 0f
                 val targetW = pw - margin * 2f
                 val targetH = ph - margin * 2f
                 val imgAspect = p.width.toFloat() / p.height.coerceAtLeast(1)
@@ -96,8 +109,11 @@ object PdfWriter {
                     dh = targetH
                     dw = targetH * imgAspect
                 }
-                val ox = (pw - dw) / 2f
-                val oy = (ph - dh) / 2f
+                var ox = (pw - dw) / 2f
+                var oy = (ph - dh) / 2f
+                if (p.box != null) {
+                    ox = p.box[2]; oy = p.box[3]; dw = p.box[4]; dh = p.box[5]
+                }
                 val cs = "q ${f(dw)} 0 0 ${f(dh)} ${f(ox)} ${f(oy)} cm /Im0 Do Q\n"
                 offsets[cont] = out.count
                 w("$cont 0 obj\n<< /Length ${cs.length} >>\nstream\n$cs" + "endstream\nendobj\n")

@@ -1,7 +1,6 @@
 package com.campdf.app.ui
 
 import android.text.format.Formatter
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,6 +32,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.FileCopy
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Edit
@@ -101,8 +101,9 @@ fun HomeScreen(vm: AppViewModel) {
     val all = vm.sortedDocs(vm.docs)
     var sortMenu by remember { mutableStateOf(false) }
     // v3.5 tools: password lock (document chosen from the Tools row or from a document's menu)
-    var pickForLock by remember { mutableStateOf(false) }
     var lockDoc by remember { mutableStateOf<DocItem?>(null) }
+    // v3.6: all tools (and the dialogs they need)
+    val tools = rememberTools(vm, all, onImportImages = { picker.launch("image/*") })
     val list = if (query.isBlank()) all else all.filter { it.name.contains(query, ignoreCase = true) }
     // forget selections of documents that no longer exist (deleted / renamed)
     LaunchedEffect(all) { val names = all.map { it.file.name }.toSet(); selected.retainAll { it in names } }
@@ -128,6 +129,12 @@ fun HomeScreen(vm: AppViewModel) {
                         val keys = list.map { it.file.name }
                         if (keys.all { it in selected }) selected.removeAll(keys) else keys.forEach { if (it !in selected) selected.add(it) }
                     }) { Icon(Icons.Rounded.SelectAll, stringResource(R.string.select_all), tint = c.onSurface) }
+                    if (selected.size >= 2) {
+                        // v3.6: merge the selected documents (in list order) into a new one
+                        IconButton(onClick = { vm.mergeDocs(selectedDocs); selected.clear() }) {
+                            Icon(Icons.Rounded.FileCopy, stringResource(R.string.tool_merge), tint = c.onSurface)
+                        }
+                    }
                     IconButton(onClick = { sharePdfs(ctx, vm, selectedDocs.map { it.file }) }) {
                         Icon(Icons.Rounded.Share, stringResource(R.string.share), tint = c.primary)
                     }
@@ -193,10 +200,7 @@ fun HomeScreen(vm: AppViewModel) {
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
             )
             if (!selecting) {
-                ToolsRow(standardTools(vm) {
-                    if (all.isEmpty()) Toast.makeText(ctx, R.string.empty_title, Toast.LENGTH_SHORT).show()
-                    else pickForLock = true
-                })
+                ToolsRow(tools)
                 Spacer(Modifier.height(4.dp))
             }
             if (list.isEmpty()) {
@@ -307,9 +311,6 @@ fun HomeScreen(vm: AppViewModel) {
         )
     }
 
-    if (pickForLock) {
-        DocPickerDialog(all, onPick = { pickForLock = false; lockDoc = it }, onDismiss = { pickForLock = false })
-    }
     LockPdfHost(vm, lockDoc) { lockDoc = null }
 
     deleteDoc?.let { doc ->

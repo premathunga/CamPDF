@@ -151,6 +151,8 @@ private fun Root(vm: AppViewModel) {
             Screen.SignPlace -> SignPlaceScreen(vm)
             Screen.Export -> ExportScreen(vm)
             Screen.Settings -> SettingsScreen(vm)
+            Screen.PageTool -> com.campdf.app.ui.PageToolScreen(vm)
+            Screen.IdIntro -> com.campdf.app.ui.IdIntroScreen(vm)
         }
         if (vm.busy) {
             Box(

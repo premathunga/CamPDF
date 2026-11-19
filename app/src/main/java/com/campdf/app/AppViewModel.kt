@@ -36,7 +36,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var cropEditIndex by mutableStateOf<Int?>(null)
     private var fromCamera = false
     /** v3.5: ID card session - pages are card sides, the PDF puts two per A4 sheet at real size. */
-    var idMode by mutableStateOf(false)
+    var idKind by mutableStateOf<IdKind?>(null)
+    val idMode: Boolean get() = idKind != null
+    /** v3.7: "for ... only" text drawn across each ID copy (null = no watermark). */
+    var idWatermark by mutableStateOf<String?>(null)
 
     // library
     var docs by mutableStateOf<List<DocItem>>(emptyList())
@@ -65,7 +68,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     init {
         Imaging.removeFingers = prefs.removeFingers
         // v3.5: password-locked copies are only kept until the next start (they were shared / saved already)
-        viewModelScope.launch(Dispatchers.IO) { lockedDir().listFiles()?.forEach { it.delete() } }
+        viewModelScope.launch(Dispatchers.IO) {
+            lockedDir().listFiles()?.forEach { it.delete() }
+            exportDir().listFiles()?.forEach { it.delete() }
+        }
         refreshDocs()
         // v3.0: optional page-finding network (assets/pagenet.bin, trained with tools/ml). Without the file the
         // app works exactly as before (straight-edge detection only).
@@ -102,6 +108,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             Screen.Export -> screen = Screen.Review
             Screen.Viewer -> screen = Screen.Home
             Screen.Settings -> screen = Screen.Home
+            Screen.PageTool -> { pageTool = null; screen = Screen.Home }
+            Screen.IdIntro -> screen = Screen.Home
             else -> Unit
         }
     }
@@ -109,13 +117,23 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ---------- viewer / edit existing document ----------
 
     /** Re-opens a saved PDF for editing: every page is rendered back into an editable page. */
-    fun editDoc(doc: DocItem) {
+    fun editDoc(doc: DocItem, thenSign: Boolean = false) {
         clearSession()
         viewModelScope.launch {
             busy = true
             val loaded = withContext(Dispatchers.IO) {
                 runCatching {
                     val result = ArrayList<PageItem>()
+                    // v3.6: CamPDF's own files give back their original JPEG pages (no re-render, no quality loss)
+                    PdfDoc.readPages(doc.file)?.let { own ->
+                        for (p in own) {
+                            val id = idCounter++
+                            val f = File(cache, "page_$id.jpg")
+                            f.writeBytes(p.jpeg)
+                            result.add(PageItem(id, f.absolutePath, f.absolutePath, null, 0, FilterMode.ORIGINAL))
+                        }
+                        return@runCatching result
+                    }
                     val pfd = ParcelFileDescriptor.open(doc.file, ParcelFileDescriptor.MODE_READ_ONLY)
                     val renderer = PdfRenderer(pfd)
                     try {
@@ -146,6 +164,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             editingDoc = doc
             selected = 0
             screen = Screen.Review
+            if (thenSign) openSign() // Tools -> Sign: straight to the signature
         }
     }
 
@@ -192,8 +211,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** v3.5 Tools -> ID card: scan the front, then the back; both go on one A4 sheet at real size. */
     fun startIdCard() {
+        screen = Screen.IdIntro
+    }
+
+    /** v3.7 ID screen -> start: scan the chosen kind (sides as needed), watermark text or null. */
+    fun startIdScan(kind: IdKind, watermark: String?) {
         clearSession()
-        idMode = true
+        idKind = kind
+        idWatermark = watermark?.takeIf { it.isNotBlank() }
         screen = Screen.Camera
     }
 
@@ -281,7 +306,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 if (cropQueue.isNotEmpty()) cropQueue.removeAt(0)
                 if (cropQueue.isEmpty()) {
                     selected = pages.lastIndex
-                    if (idMode && pages.size == 1 && fromCamera) {
+                    if ((idKind?.sides ?: 1) == 2 && pages.size == 1 && fromCamera) {
                         // front done -> straight back to the camera for the back side
                         message = getApplication<Application>().getString(R.string.id_scan_back)
                         screen = Screen.Camera
@@ -392,12 +417,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             1 -> 3000 to 92
             else -> 2000 to 82
         }
-        if (idMode) {
-            // v3.5: two card sides per A4 sheet, true size (300 / 250 / 200 dpi by quality)
+        val kind = idKind
+        if (kind != null) {
+            // v3.5 / v3.7: ID copies at true size on A4 (300 / 250 / 200 dpi by quality), watermark if chosen
             val dpi = when (quality) { 0 -> 300; 1 -> 250; else -> 200 }
-            val sheets = list.chunked(2)
+            val sheets = list.chunked(kind.perSheet)
+            val wm = idWatermark
             PdfWriter.write(target, sheets.size) { i ->
-                val bm = IdCard.sheet(sheets[i], dpi) ?: error("render")
+                val bm = IdCard.sheet(sheets[i], dpi, kind, wm) ?: error("render")
                 try {
                     PdfPage(Imaging.toJpeg(bm, jpegQuality), bm.width, bm.height, exactA4 = true)
                 } finally {
@@ -442,10 +469,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             busy = true
             val doc = withContext(Dispatchers.IO) {
                 runCatching {
-                    val file = editing?.file ?: repo.newFile(if (idMode) "ID_" + repo.defaultName().removePrefix("Scan_") else repo.defaultName())
+                    val kind = idKind
+                    val file = editing?.file ?: repo.newFile(if (kind != null) kind.prefix + repo.defaultName().removePrefix("Scan_") else repo.defaultName())
                     writePdfSafely(file, snapshot, quality)
-                    val nPages = if (idMode) (snapshot.size + 1) / 2 else snapshot.size
-                    val thumbBitmap = if (idMode) IdCard.sheet(snapshot.take(2), 40) else Imaging.pageBitmap(snapshot[0], 360)
+                    val nPages = if (kind != null) (snapshot.size + kind.perSheet - 1) / kind.perSheet else snapshot.size
+                    val thumbBitmap = if (kind != null) IdCard.sheet(snapshot.take(kind.perSheet), 40, kind, idWatermark)
+                        else Imaging.pageBitmap(snapshot[0], 360)
                     try { repo.writeMeta(file, nPages, thumbBitmap) } finally { thumbBitmap?.recycle() }
                     DocItem(
                         file, file.nameWithoutExtension, nPages, file.length(), file.lastModified(),
@@ -461,6 +490,207 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             refreshDocs()
         }
     }
+
+    // ---------- v3.6 document tools ----------
+
+    var pageTool by mutableStateOf<PageToolState?>(null)
+
+    private fun exportDir() = File(getApplication<Application>().filesDir, "export").apply { mkdirs() }
+
+    private fun str(id: Int, vararg args: Any): String = getApplication<Application>().getString(id, *args)
+
+    /** Every page of a PDF other apps made, rendered at ~200 dpi into JPEG pages (password-protected: throws). */
+    private fun renderPages(file: File): List<PdfPage> {
+        val out = ArrayList<PdfPage>()
+        val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+        val renderer = PdfRenderer(pfd)
+        try {
+            for (i in 0 until renderer.pageCount) {
+                renderer.openPage(i).use { page ->
+                    val pw = page.width.toFloat() // points
+                    val ph = page.height.toFloat()
+                    val scale = minOf(200f / 72f, 2480f / maxOf(pw, ph))
+                    val w = (pw * scale).toInt().coerceAtLeast(1)
+                    val h = (ph * scale).toInt().coerceAtLeast(1)
+                    val bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                    bm.eraseColor(android.graphics.Color.WHITE)
+                    page.render(bm, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
+                    val jpeg = try { Imaging.toJpeg(bm, 90) } finally { bm.recycle() }
+                    out.add(PdfPage(jpeg, w, h, box = floatArrayOf(pw, ph, 0f, 0f, pw, ph)))
+                }
+            }
+        } finally {
+            runCatching { renderer.close() }
+            runCatching { pfd.close() }
+        }
+        return out
+    }
+
+    /** Pages of a saved document: CamPDF files losslessly, other PDFs rendered. */
+    private fun loadPages(file: File): List<PdfPage> = PdfDoc.readPages(file) ?: renderPages(file)
+
+    private fun decodeJpeg(jpeg: ByteArray, maxDim: Int): Bitmap? {
+        val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, o)
+        var sample = 1
+        while (maxOf(o.outWidth, o.outHeight) / (sample * 2) >= maxDim) sample *= 2
+        val d = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+        return android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, d)
+    }
+
+    /** Writes [list] as a document (a new file, or over [target]) with its sidecars; returns it. IO thread. */
+    private fun saveDoc(name: String, list: List<PdfPage>, target: File? = null): DocItem {
+        require(list.isNotEmpty())
+        val file = target ?: repo.newFile(name)
+        val parent = file.parentFile ?: repo.dir
+        val temp = File(parent, ".${file.name}.${System.nanoTime()}.tmp")
+        try {
+            PdfWriter.write(temp, list.size) { list[it] }
+            try {
+                Files.move(temp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            if (temp.exists()) temp.delete()
+        }
+        val thumb = decodeJpeg(list[0].jpeg, 360)
+        try { repo.writeMeta(file, list.size, thumb) } finally { thumb?.recycle() }
+        return DocItem(
+            file, file.nameWithoutExtension, list.size, file.length(), file.lastModified(),
+            File(repo.dir, file.name + ".jpg").takeIf { it.exists() }
+        )
+    }
+
+    /** Runs a document tool off the main thread with the busy overlay; null result = error message. */
+    private fun <T> tool(work: () -> T, done: (T) -> Unit) {
+        viewModelScope.launch {
+            busy = true
+            val r = withContext(Dispatchers.IO) { runCatching(work) }
+            busy = false
+            refreshDocs()
+            r.onSuccess(done).onFailure {
+                message = if (it is SecurityException) str(R.string.pdf_locked_cannot) else err()
+            }
+        }
+    }
+
+    /** Tools -> Import files: PDFs from the phone become CamPDF documents (others' PDFs are rendered to pages). */
+    fun importPdfs(uris: List<Uri>) {
+        val app = getApplication<Application>()
+        tool({
+            var n = 0
+            for (u in uris) {
+                val name = runCatching {
+                    app.contentResolver.query(u, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                        if (c.moveToFirst()) c.getString(0) else null
+                    }
+                }.getOrNull()?.removeSuffix(".pdf")?.removeSuffix(".PDF") ?: repo.defaultName()
+                val tmp = File(cache, "imp_${System.nanoTime()}.pdf")
+                try {
+                    app.contentResolver.openInputStream(u)!!.use { i -> FileOutputStream(tmp).use { i.copyTo(it) } }
+                    val own = PdfDoc.readPages(tmp)
+                    if (own != null) {
+                        // already a CamPDF file: keep it byte for byte
+                        val f = repo.newFile(name)
+                        tmp.copyTo(f)
+                        val thumb = decodeJpeg(own[0].jpeg, 360)
+                        try { repo.writeMeta(f, own.size, thumb) } finally { thumb?.recycle() }
+                    } else {
+                        saveDoc(name, renderPages(tmp))
+                    }
+                    n++
+                } finally {
+                    tmp.delete()
+                }
+            }
+            n
+        }) { n -> message = str(R.string.pdf_imported, n) }
+    }
+
+    /** Tools -> Merge files: one new document with all pages of [list], in that order (lossless). */
+    fun mergeDocs(list: List<DocItem>) {
+        if (list.size < 2) return
+        tool({
+            val all = list.flatMap { loadPages(it.file) }
+            saveDoc("Merged_" + repo.defaultName().removePrefix("Scan_"), all)
+        }) { d -> message = str(R.string.merged_ok, list.size, d.pages) }
+    }
+
+    /** Tools -> Extract pages / Reorder pages: loads the pages and opens the page picker. */
+    fun openPageTool(doc: DocItem, mode: PageToolMode) {
+        tool({ loadPages(doc.file) }) { p ->
+            pageTool = PageToolState(doc, mode, p)
+            screen = Screen.PageTool
+        }
+    }
+
+    /** New document with the chosen pages (indices in document order). */
+    fun extractPages(indices: List<Int>) {
+        val st = pageTool ?: return
+        if (indices.isEmpty()) return
+        val chosen = indices.sorted().map { st.pages[it] }
+        tool({ saveDoc(st.doc.name + " (" + indices.sorted().joinToString(",") { "${it + 1}" }.take(40) + ")", chosen) }) { d ->
+            message = str(R.string.extracted_ok, d.pages)
+            pageTool = null
+            screen = Screen.Home
+        }
+    }
+
+    /** Rewrites the document with its pages in [order] (indices of the old pages). */
+    fun reorderPages(order: List<Int>) {
+        val st = pageTool ?: return
+        if (order.size != st.pages.size) return
+        tool({ saveDoc(st.doc.name, order.map { st.pages[it] }, target = st.doc.file) }) {
+            message = str(R.string.reordered_ok)
+            pageTool = null
+            screen = Screen.Home
+        }
+    }
+
+    /**
+     * Tools -> Compress: a smaller copy. level 0 = for sharing (longest side 1600 px, JPEG 70),
+     * level 1 = smallest (1200 px, JPEG 55). Page layout stays exactly the same.
+     */
+    fun compressDoc(doc: DocItem, level: Int) {
+        val (maxDim, q) = if (level == 0) 1600 to 70 else 1200 to 55
+        tool({
+            val before = doc.file.length()
+            val small = loadPages(doc.file).map { p ->
+                val bm = decodeJpeg(p.jpeg, maxDim * 2) ?: error("decode")
+                val s = minOf(1f, maxDim.toFloat() / maxOf(bm.width, bm.height))
+                val sc = if (s < 1f) Bitmap.createScaledBitmap(bm, (bm.width * s).toInt().coerceAtLeast(1), (bm.height * s).toInt().coerceAtLeast(1), true) else bm
+                if (sc !== bm) bm.recycle()
+                val sw = sc.width
+                val sh = sc.height
+                val jpeg = try { Imaging.toJpeg(sc, q) } finally { sc.recycle() }
+                // the page keeps its exact place and size on the sheet (box); an already small page stays as it was
+                if (jpeg.size < p.jpeg.size) PdfPage(jpeg, sw, sh, exactA4 = p.exactA4, box = p.box) else p
+            }
+            val d = saveDoc(doc.name + " (small)", small)
+            before to d
+        }) { (before, d) ->
+            val ctx = getApplication<Application>()
+            message = str(R.string.compressed_ok,
+                android.text.format.Formatter.formatShortFileSize(ctx, before),
+                android.text.format.Formatter.formatShortFileSize(ctx, d.size))
+        }
+    }
+
+    /** Tools -> PDF to images: one JPEG per page (export folder, cleared at the next start) for [then]. */
+    fun pdfToImages(doc: DocItem, then: (List<File>) -> Unit) {
+        tool({
+            val dir = exportDir()
+            dir.listFiles()?.forEach { it.delete() }
+            val base = repo.sanitize(doc.name).replace(' ', '_')
+            loadPages(doc.file).mapIndexed { i, p ->
+                File(dir, "${base}_${i + 1}.jpg").also { it.writeBytes(p.jpeg) }
+            }
+        }, then)
+    }
+
+    /** Tools -> Sign: opens the document's pages for editing and goes straight to the signature. */
+    fun signDoc(doc: DocItem) = editDoc(doc, thenSign = true)
 
     // ---------- v3.5 password lock ----------
 
@@ -531,7 +761,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun clearSession() {
-        idMode = false
+        idKind = null
+        idWatermark = null
         pages.clear()
         cropQueue.clear()
         cropEditIndex = null

@@ -38,6 +38,17 @@ class Prefs(context: Context) {
         get() = sp.getInt("sort_mode", 0)
         set(v) { sp.edit().putInt("sort_mode", v).apply() }
 
+    /** v3.7 ID screen: last kind (IdKind ordinal), watermark on/off and the last purpose typed. */
+    var idKind: Int
+        get() = sp.getInt("id_kind", 0)
+        set(v) { sp.edit().putInt("id_kind", v).apply() }
+    var idWatermarkOn: Boolean
+        get() = sp.getBoolean("id_wm_on", true)
+        set(v) { sp.edit().putBoolean("id_wm_on", v).apply() }
+    var idPurpose: String
+        get() = sp.getString("id_purpose", "") ?: ""
+        set(v) { sp.edit().putString("id_purpose", v).apply() }
+
     var appLock: Boolean
         get() = sp.getBoolean("app_lock", false)
         set(v) { sp.edit().putBoolean("app_lock", v).apply() }

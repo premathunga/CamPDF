@@ -1,3 +1,5 @@
+// Run: java -cp sim.jar LiveTestKt pagenet.bin pages/*.jpg     (documents: capture time)
+//      java -Dneg=1 -cp sim.jar LiveTestKt pagenet.bin bg/*.jpg  (bare backgrounds: must never auto-capture)
 import android.graphics.*
 import com.campdf.app.*
 import java.io.File
@@ -22,7 +24,18 @@ fun main(a: Array<String>) {
     val tiny = floatArrayOf(0.45f, 0.45f, 0.6f, 0.45f, 0.6f, 0.6f, 0.45f, 0.6f)
     var t2 = 3000L; repeat(10) { st = tr.update(tiny, t2); t2 += 250 }; check(!st.ready, "small far page never captures")
 
+    tr.reset(); var t3 = 0L; repeat(12) { st = tr.update(q, t3, false); t3 += 250 }; check(st.quad != null && !st.ready && st.progress == 0f, "not page-like: outline shown, never captured")
+    st = tr.update(q, t3, true); check(st.progress == 0f, "one page-like frame is not enough after doubtful ones")
+    repeat(6) { t3 += 250; st = tr.update(q, t3, true) }; check(st.ready, "page-like again -> captures")
     PageNet.load(File(a[0]).readBytes())
+    if (System.getProperty("neg") != null) {
+        var caught = 0
+        for (f in a.drop(1)) { val b = BitmapFactory.decodeFile(f)!!; val t = LiveTracker(); var shot = false
+            for (k in 0 until 16) { val fr = Bitmap.createScaledBitmap(b, if (b.width < b.height) 300 else 400, if (b.width < b.height) 400 else 300, true)
+                val dq = DocDetect.detectLive(fr); if (t.update(dq, k * 250L, DocDetect.lastLiveAuto).ready) { shot = true; break } }
+            if (shot) { caught++; println("  FALSE capture: ${File(f).name}") } }
+        println("backgrounds: ${a.size - 1}, false auto-captures: $caught"); System.exit(0)
+    }
     val rnd = java.util.Random(7)
     val times = ArrayList<Long>()
     var never = 0
@@ -38,7 +51,7 @@ fun main(a: Array<String>) {
             for (i in fr.data.indices) { val p = fr.data[i]; val n = (rnd.nextGaussian() * 4).toInt()
                 fun c(v: Int) = (v + n).coerceIn(0, 255)
                 fr.data[i] = (0xFF shl 24) or (c((p shr 16) and 255) shl 16) or (c((p shr 8) and 255) shl 8) or c(p and 255) }
-            val s = t.update(DocDetect.detectLive(fr), k * 250L)
+            val dq = DocDetect.detectLive(fr); val s = t.update(dq, k * 250L, DocDetect.lastLiveAuto)
             if (s.ready) { shot = k * 250L; break }
         }
         if (shot < 0) { never++; println("  no capture in 4 s: ${File(f).name}") } else times.add(shot)

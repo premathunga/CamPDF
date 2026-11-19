@@ -28,6 +28,16 @@ object DocDetect {
     private class Cand(val pts: FloatArray, val score: Float, val quad: List<Pt>)
 
     @Volatile var lastScore = 0f
+    /**
+     * v3.5.1: how sure the last [detectLive] call is that the outline is a real page (0..1): the network's page
+     * probability agreeing with the returned outline (soft IoU). Auto-capture only fires above [LIVE_CONFIDENT];
+     * an outline the network does not back (a patch of ground, a wall, a doorway) is still drawn but never
+     * captured automatically. Written and read on the single camera-analysis thread.
+     */
+    @Volatile var lastLiveConfidence = 0f
+    @Volatile var LIVE_CONFIDENT = 0.75f
+    /** v3.5.1: true when the last [detectLive] outline looks enough like a document to be captured automatically. */
+    @Volatile var lastLiveAuto = false
     @Volatile var usePageNet = true
     @Volatile var LIVE_MIN_S = 0.20f
     @Volatile var lastProb: FloatArray? = null
@@ -167,6 +177,8 @@ object DocDetect {
      * Falls back to [detectBitmap] when the network is not loaded. Returns normalized TL,TR,BR,BL or null.
      */
     fun detectLive(bm: Bitmap): FloatArray? {
+        lastLiveConfidence = 0f
+        lastLiveAuto = false
         if (!PageNet.ready || !usePageNet) return detectBitmap(bm)
         val n = PageNet.IN
         val small = Bitmap.createScaledBitmap(bm, n, n, true)
@@ -192,6 +204,12 @@ object DocDetect {
         val iou = softIou(q, prob, w, h)
         lastScore = iou
         if (iou < 0.70f) return null
+        // the network's view of the final outline (any path below): how much of it is page and only page
+        fun confidence(out: FloatArray?): Float {
+            if (out == null) return 0f
+            val pq = List(4) { Pt(out[2 * it] * (w - 1), out[2 * it + 1] * (h - 1)) }
+            return softIou(pq, prob, w, h)
+        }
         // snap the sides onto the real page edges of the frame (cheap: one Sobel pass on <= 320 px)
         val ls = 320f / max(bm.width, bm.height)
         val fw = max(16, (bm.width * min(1f, ls)).roundToInt())
@@ -215,14 +233,82 @@ object DocDetect {
         val lqQ = LineQuad.Q(FloatArray(4) { qf[it].x }, FloatArray(4) { qf[it].y })
         val liveS = lq.score(lqQ)
         val liveInner = lq.minInnerSupport(lqQ)
-        if (liveInner < 0.01f || liveS < LIVE_MIN_S) return detectBitmap(bm)
+        if (liveInner < 0.01f || liveS < LIVE_MIN_S) {
+            val full = detectBitmap(bm)
+            lastLiveConfidence = confidence(full)
+            lastLiveAuto = autoEvidence(full, lastLiveConfidence, gray, fw, fh)
+            return full
+        }
         val snapped = refineQuad(qf, mag, fw, fh)
         val out = FloatArray(8)
         for (i in 0 until 4) {
             out[2 * i] = (snapped[i].x / (fw - 1)).coerceIn(0f, 1f)
             out[2 * i + 1] = (snapped[i].y / (fh - 1)).coerceIn(0f, 1f)
         }
+        lastLiveConfidence = confidence(out)
+        lastLiveAuto = autoEvidence(out, lastLiveConfidence, gray, fw, fh)
         return out
+    }
+
+    /**
+     * v3.5.1 (phone test: auto-capture fired on the bare ground / anything in view right after opening the camera):
+     * an outline may only be captured automatically when the network is sure it is a page ([LIVE_CONFIDENT]) AND
+     * the frame shows document evidence:
+     *  - writing: >= 1% of the page interior are small dark marks (pixels 35 levels darker than their 9x9 mean), or
+     *  - a separate sheet: at least 3 of its sides lie inside the frame (background visible) and it is clearly
+     *    brighter than its surroundings (mean luminance +30).
+     * Simulated still phone (tools/jvmtest/LiveTest.kt): 62 of 63 document photos still auto-capture (median 1.0 s),
+     * 35 bare backgrounds - cloth, walls, wood, floor, ground - 0 false captures (the network alone accepted most).
+     * Other outlines are still drawn, and the shutter button works as always.
+     */
+    private fun autoEvidence(q: FloatArray?, conf: Float, gray: FloatArray, w: Int, h: Int): Boolean {
+        if (q == null || conf < LIVE_CONFIDENT) return false
+        fun inside(qq: FloatArray, x: Float, y: Float): Boolean {
+            var sg = 0
+            for (i in 0 until 4) {
+                val j = (i + 1) % 4
+                val c = (qq[2 * j] - qq[2 * i]) * (y - qq[2 * i + 1]) - (qq[2 * j + 1] - qq[2 * i + 1]) * (x - qq[2 * i])
+                val s = if (c > 0) 1 else -1
+                if (sg == 0) sg = s else if (s != sg) return false
+            }
+            return true
+        }
+        // integral image for 9x9 local means
+        val r = 4
+        val ii = DoubleArray((w + 1) * (h + 1))
+        for (y in 0 until h) {
+            var row = 0.0
+            for (x in 0 until w) {
+                row += gray[y * w + x]
+                ii[(y + 1) * (w + 1) + x + 1] = ii[y * (w + 1) + x + 1] + row
+            }
+        }
+        val cx = (q[0] + q[2] + q[4] + q[6]) / 4f
+        val cy = (q[1] + q[3] + q[5] + q[7]) / 4f
+        val shrunk = FloatArray(8) { if (it % 2 == 0) cx + (q[it] - cx) * 0.85f else cy + (q[it] - cy) * 0.85f }
+        var nIn = 0
+        var ink = 0
+        var sumIn = 0.0
+        var cntIn = 0
+        var sumOut = 0.0
+        var cntOut = 0
+        val area = ((2 * r + 1) * (2 * r + 1)).toDouble()
+        for (y in r until h - r) for (x in r until w - r) {
+            val xn = (x + 0.5f) / w
+            val yn = (y + 0.5f) / h
+            val v = gray[y * w + x]
+            if (inside(q, xn, yn)) { sumIn += v; cntIn++ } else { sumOut += v; cntOut++ }
+            if (!inside(shrunk, xn, yn)) continue
+            nIn++
+            val x0 = x - r; val y0 = y - r; val x1 = x + r + 1; val y1 = y + r + 1
+            val s = ii[y1 * (w + 1) + x1] - ii[y0 * (w + 1) + x1] - ii[y1 * (w + 1) + x0] + ii[y0 * (w + 1) + x0]
+            if (v < s / area - 35.0) ink++
+        }
+        if (nIn > 0 && ink.toFloat() / nIn >= 0.010f) return true
+        val margin = 0.025f
+        val sidesIn = listOf(min(q[1], q[3]), 1f - max(q[5], q[7]), min(q[0], q[6]), 1f - max(q[2], q[4])).count { it > margin }
+        val brighter = cntIn > 0 && cntOut > 50 && sumIn / cntIn - sumOut / cntOut >= 30.0
+        return sidesIn >= 3 && brighter
     }
 
     /** Core detection on a small (about 400 px) image; normalized TL,TR,BR,BL or null. Thread-safe. */

@@ -15,6 +15,9 @@ import kotlin.math.max
  *   frame agrees with it, the page really moved and the outline jumps there.
  * - The outline is hidden only after 3 frames in a row without a page.
  * - Pages smaller than [minArea] of the frame never trigger a capture (too far away to be readable).
+ * v3.5.1: frames also say whether the outline looks like a document ([update] `pageLike`, see DocDetect.lastLiveAuto).
+ * The hold timer only runs while most recent frames are page-like (smoothed, so one doubtful frame does not reset
+ * it); an outline around the bare ground, a wall or cloth is shown but never auto-captured.
  * Plain Kotlin, no Android types: unit-tested on the PC (tools/jvmtest/LiveTest.kt).
  */
 class LiveTracker(
@@ -23,7 +26,7 @@ class LiveTracker(
     private val minArea: Float = 0.12f,
     private val jump: Float = 0.08f
 ) {
-    class State(val quad: FloatArray?, val progress: Float) {
+    class State(val quad: FloatArray?, val progress: Float, val pageLike: Boolean = true) {
         val ready: Boolean get() = progress >= 1f
     }
 
@@ -32,8 +35,12 @@ class LiveTracker(
     private var misses = 0
     private var anchor: FloatArray? = null
     private var steadySince = -1L
+    private var likeAvg = 0f
+
+    private val pageLike: Boolean get() = likeAvg >= 0.5f
 
     fun reset() {
+        likeAvg = 0f
         shown = null
         pending = null
         misses = 0
@@ -42,7 +49,7 @@ class LiveTracker(
     }
 
     /** q = normalized TL,TR,BR,BL of the page in this frame (null = no page found), t = frame time in ms. */
-    fun update(q: FloatArray?, t: Long): State {
+    fun update(q: FloatArray?, t: Long, like: Boolean = true): State {
         if (q == null || q.size != 8 || !plausible(q)) {
             misses++
             if (misses >= 3) {
@@ -50,9 +57,10 @@ class LiveTracker(
                 anchor = null
                 steadySince = -1L
             }
-            return State(shown?.copyOf(), progress(t))
+            return State(shown?.copyOf(), progress(t), pageLike)
         }
         misses = 0
+        likeAvg = if (shown == null) (if (like) 1f else 0f) else likeAvg * 0.6f + (if (like) 0.4f else 0f)
         val s = shown
         if (s == null) {
             shown = q.copyOf()
@@ -66,7 +74,7 @@ class LiveTracker(
                 steadySince = -1L
             } else {
                 pending = q.copyOf() // possible glitch: wait for the next frame
-                return State(s.copyOf(), progress(t))
+                return State(s.copyOf(), progress(t), pageLike)
             }
         } else {
             pending = null
@@ -74,14 +82,14 @@ class LiveTracker(
         }
         val cur = shown!!
         val a = anchor
-        if (area(cur) < minArea) {
+        if (area(cur) < minArea || !pageLike) {
             anchor = null
             steadySince = -1L
         } else if (a == null || meanMove(a, cur) > tolerance) {
             anchor = cur.copyOf()
             steadySince = t
         }
-        return State(cur.copyOf(), progress(t))
+        return State(cur.copyOf(), progress(t), pageLike)
     }
 
     private fun progress(t: Long): Float =

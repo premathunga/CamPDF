@@ -264,3 +264,44 @@ out with the shadow turned into a speckled yellow-green patch.
   (`PdfCrypt.kt`) using only the platform's AES / SHA-2; the password is never stored. Locked copies are deleted
   the next time the app starts. Checked with qpdf, poppler and pypdf (`tools/jvmtest/CryptTest.kt`), including a
   Sinhala password.
+
+## v3.5.1 - auto-capture only takes documents
+Phone test: right after opening the camera, auto-capture took whatever was in view (the ground), and while the
+gallery picker was open the camera behind it kept capturing, so importing was impossible.
+- Live detection now also says whether the outline looks like a document (`DocDetect.lastLiveAuto`): the network
+  must be sure it is a page AND there is writing on it, or it is a separate sheet (3+ sides inside the frame,
+  brighter than the background). Other outlines are still drawn ("tap to capture"), but never auto-captured.
+  Simulation: 62/63 document photos auto-capture (median 1.0 s); 35 bare backgrounds: 0 false captures.
+- `LiveTracker`: the hold timer only runs while recent frames are page-like.
+- Camera screen: no auto-capture in the first 1.5 s after the camera opens; live detection is paused while the
+  photo picker is open, while the app is not in front, and while an import is being loaded.
+
+## v3.5.2 - tool icons
+- Tools row: each tool has its own colour - a two-tone icon in a round badge tinted with that colour, name below
+  (up to two lines), no card frame. ID card = teal, Password = green; `ToolColors` holds the palette for later tools.
+
+## v3.6.0 - eleven tools
+Home -> Tools (scrolls sideways): **ID card, Import images, Import files, PDF to images, Sign, Merge files,
+Extract pages, Reorder pages, Lock, Compress, Print**. All offline, own code, no new library.
+- `PdfDoc.kt`: reads CamPDF's own PDFs back page by page (original JPEG bytes + exact page geometry), so merge,
+  extract, reorder and edit rewrite files **without re-compressing** (renders are pixel-identical, checked with
+  poppler; `tools/jvmtest/PdfDocTest.kt`). PDFs from other apps are rendered with Android's PdfRenderer (~200 dpi).
+  `PdfPage.box` keeps each page's exact size and image placement.
+- Import files: PDFs from the phone become CamPDF documents (password-protected ones are refused with a message).
+- PDF to images: one JPEG per page -> share, or save to the gallery (Pictures/CamPDF, Android 10+).
+- Sign: opens the chosen document's pages and goes straight to the signature.
+- Merge: tap documents in order (also from multi-select on the home list). Extract / Reorder: a page grid -
+  tap pages to copy into a new document, or tap them in their new order.
+- Compress: smaller copy (for sharing 1600 px / JPEG 70, or smallest 1200 px / JPEG 55); original unchanged.
+- Print: Android's print screen (any printer, or "Save as PDF").
+- Editing a saved CamPDF document now reuses its original page images (no quality loss from re-rendering).
+
+## v3.7.0 - ID copy screen
+Tools -> ID card now opens an ID copy screen first:
+- **What is copied**: ID card (NIC) and Driving licence - front + back on one A4 at 85.6 x 54 mm; Passport photo
+  page - one per A4 at 125 x 88 mm; Certificate - the whole document fitted to A4. (No bank cards on purpose.)
+  The camera asks for the back side only for two-sided cards.
+- **A4 example**: our own drawing of exactly where the copies land (same layout code as the PDF, `IdCard.layout`).
+- **"For ... only" watermark**: the purpose the user types + today's date ("For bank account opening only ·
+  19/11/2026"), repeated diagonally across each copy in grey, in Sinhala / English / Tamil (follows the app
+  language). On by default; kind, switch and last purpose are remembered.
