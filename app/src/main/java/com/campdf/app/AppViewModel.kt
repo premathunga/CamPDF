@@ -215,6 +215,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         screen = Screen.IdIntro
     }
 
+    /** v3.8.1 ID screen -> import: the chosen kind from photos already on the phone (front and back, in order). */
+    fun startIdImport(kind: IdKind, watermark: String?, uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        clearSession()
+        idKind = kind
+        idWatermark = watermark?.takeIf { it.isNotBlank() }
+        importUris(uris)
+    }
+
     /** v3.7 ID screen -> start: scan the chosen kind (sides as needed), watermark text or null. */
     fun startIdScan(kind: IdKind, watermark: String?) {
         clearSession()
@@ -302,8 +311,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 cropEditIndex = null
                 screen = Screen.Review
             } else {
-                // ID cards keep their colours (photo, emblem): Enhance instead of the paper-whitening Magic
-                pages.add(PageItem(id, raw, basePath, corners, filter = if (idMode) FilterMode.ENHANCE else FilterMode.MAGIC))
+                // v3.8.1 ID copies: Lighten - a plain, colour-true brightening. Magic / Enhance re-balance the light and
+                // turned the security print of a laminated NIC into strong orange / yellow (phone test); Lighten kept
+                // the card as it looks.
+                pages.add(PageItem(id, raw, basePath, corners, filter = if (idMode) FilterMode.LIGHTEN else FilterMode.MAGIC))
                 if (cropQueue.isNotEmpty()) cropQueue.removeAt(0)
                 if (cropQueue.isEmpty()) {
                     selected = pages.lastIndex

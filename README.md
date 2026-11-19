@@ -312,3 +312,9 @@ Tools -> ID card now opens an ID copy screen first:
 - Document list: a **checkbox is always shown** on each document - tap it to start selecting (long-press still works).
 - **Print** added to a document's menu and to the selection bar (several selected documents are joined losslessly
   into one temporary file and printed as one job).
+
+## v3.8.1 - ID copy fixes (phone test)
+- ID copies start with the **Lighten** filter (plain, colour-true brightening). Magic / Enhance re-balance the light
+  and turned the security print of a laminated NIC strong orange / yellow; Lighten kept the card as it looks.
+- ID screen: **Import** button next to Start scanning - take the card photos from the gallery (front first, then back).
+- The "For ... only" watermark is **off** by default (the switch is remembered).

@@ -1,6 +1,8 @@
 package com.campdf.app.ui
 
 import android.graphics.RectF
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -22,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -80,6 +83,10 @@ fun IdIntroScreen(vm: AppViewModel) {
     var wmOn by remember { mutableStateOf(vm.prefs.idWatermarkOn) }
     var purpose by remember { mutableStateOf(vm.prefs.idPurpose) }
     val date = remember { SimpleDateFormat("dd/MM/yyyy", Locale.US).format(Date()) }
+    var pendingWm by remember { mutableStateOf<String?>(null) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+        if (uris.isNotEmpty()) vm.startIdImport(kind, pendingWm, uris.take(kind.sides * 4))
+    }
     val wmText = if (purpose.isBlank()) stringResource(R.string.wm_copy_only, date)
         else stringResource(R.string.wm_format, purpose.trim(), date)
 
@@ -144,15 +151,33 @@ fun IdIntroScreen(vm: AppViewModel) {
             }
             Spacer(Modifier.height(12.dp))
         }
-        PrimaryButton(
-            stringResource(R.string.id_start),
-            Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp),
-            icon = Icons.Rounded.CameraAlt
-        ) {
+        fun saveChoice() {
             vm.prefs.idKind = kind.ordinal
             vm.prefs.idWatermarkOn = wmOn
             vm.prefs.idPurpose = purpose.trim()
-            vm.startIdScan(kind, if (wmOn) wmText else null)
+        }
+        if (kind.sides == 2) {
+            Text(
+                stringResource(R.string.id_import_hint),
+                fontSize = 12.sp,
+                color = c.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+            )
+        }
+        // v3.8.1: scan with the camera, or take the card photos from the gallery
+        Row(
+            Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            PrimaryButton(stringResource(R.string.id_start), Modifier.weight(1.25f), icon = Icons.Rounded.CameraAlt) {
+                saveChoice()
+                vm.startIdScan(kind, if (wmOn) wmText else null)
+            }
+            SecondaryButton(stringResource(R.string.id_import), Modifier.weight(1f), icon = Icons.Rounded.PhotoLibrary) {
+                saveChoice()
+                pendingWm = if (wmOn) wmText else null
+                picker.launch("image/*")
+            }
         }
     }
 }

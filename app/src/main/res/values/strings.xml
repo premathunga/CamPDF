@@ -193,4 +193,6 @@
     <string name="sec_convert">Convert</string>
     <string name="sec_edit">Edit</string>
     <string name="sec_util">Utilities</string>
+    <string name="id_import">Import</string>
+    <string name="id_import_hint">Import: choose the front photo first, then the back.</string>
 </resources>

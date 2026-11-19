@@ -43,7 +43,7 @@ class Prefs(context: Context) {
         get() = sp.getInt("id_kind", 0)
         set(v) { sp.edit().putInt("id_kind", v).apply() }
     var idWatermarkOn: Boolean
-        get() = sp.getBoolean("id_wm_on", true)
+        get() = sp.getBoolean("id_wm_on", false)
         set(v) { sp.edit().putBoolean("id_wm_on", v).apply() }
     var idPurpose: String
         get() = sp.getString("id_purpose", "") ?: ""
