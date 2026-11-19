@@ -220,3 +220,15 @@ page and the scan came out distorted.
 - Live (`detectLive`): when the network's quad has such a side, or its sides are poorly backed (score < 0.20), the
   frame goes to the full detector. Live speed unchanged (66 ms median on the PC); auto-capture simulation: 63/63
   pages captured, median 1.0 s.
+
+## v3.3.3 - tinted shadows
+Phone test (v3.3.2, police message form): live scan now gives a full-resolution page (2126 px wide, was 1210)
+and both live and import crop the whole page. But the import (a photo with a big shadow over the lower half) came
+out with the shadow turned into a speckled yellow-green patch.
+- Cause 1: the "coloured areas keep their colour" rule (v2.9) also kept the colour of a shadow - shadows are tinted
+  (warm room light, light reflected from coloured cloth). An area clearly darker than the paper (< 90% of the paper
+  level, fully from 78%) is now treated as a shadow and its tint is removed. Printed coloured cells keep their colour.
+- Cause 2: the light correction brightens a shadow and amplifies the camera's colour noise by the same factor. The
+  Magic chroma dead-zone now grows with that factor (up to 3x), so the noise is not boosted into colour speckles.
+- Reproduced on the PC with a tinted, noisy shadow added to the form photo: patch gone. Other test pages: coloured
+  headers and blue / red ink unchanged.

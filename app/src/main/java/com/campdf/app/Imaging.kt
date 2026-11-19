@@ -1364,7 +1364,11 @@ object Imaging {
                         // content: only its brightness is corrected, its colour is kept.
                         val bLs = bL.coerceAtLeast(30f)
                         val cDist = max(abs(bValR / bLs - paper[0] / paperL), max(abs(bValG / bLs - paper[1] / paperL), abs(bValB / bLs - paper[2] / paperL)))
-                        val cw = 1f - smooth01((cDist - 0.07f) / 0.08f)
+                        // v3.3.3: ...but a clearly DARKER area is a shadow, and shadows are often tinted (warm room
+                        // light, light reflected from a coloured cloth). Keeping that tint turned shadowed paper into
+                        // a yellow-green patch; a shadow gets its colour corrected like any other light falloff.
+                        val shade = smooth01((0.90f - bL / paperL) / 0.12f)
+                        val cw = max(1f - smooth01((cDist - 0.07f) / 0.08f), shade)
                         val lEff = (paperL + (bL - paperL) * wt) / paperL
                         val eR = ((paper[0] + (bValR - paper[0]) * wt) * cw + paper[0] * lEff * (1f - cw)).coerceAtLeast(30f)
                         val eG = ((paper[1] + (bValG - paper[1]) * wt) * cw + paper[1] * lEff * (1f - cw)).coerceAtLeast(30f)
@@ -1458,7 +1462,10 @@ object Imaging {
                             // toner) is not ink colour: below ~4% it is dropped, so printed text is neutral
                             // black; real pen / stamp colours (usually > 10%) keep the full boost.
                             val cMag = max(abs(cr), max(abs(cg), abs(cb)))
-                            val k = MAGIC_CHROMA * smooth01((0.93f - l) / 0.25f) * smooth01((cMag - 0.035f) / 0.05f)
+                            // v3.3.3: the dead-zone grows inside shadows: the light correction amplifies camera colour
+                            // noise there by the same factor it brightens the paper (speckled yellow-green shadows)
+                            val amp = (lumScale * paperL / 255f).coerceIn(1f, 3f)
+                            val k = MAGIC_CHROMA * smooth01((0.93f - l) / 0.25f) * smooth01((cMag - 0.035f * amp) / (0.05f * amp))
                             rr = ((lOut + cr * k) * 255f).toInt().coerceIn(0, 255)
                             gg = ((lOut + cg * k) * 255f).toInt().coerceIn(0, 255)
                             bb = ((lOut + cb * k) * 255f).toInt().coerceIn(0, 255)
