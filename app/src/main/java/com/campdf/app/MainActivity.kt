@@ -1,8 +1,13 @@
 package com.campdf.app
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -52,14 +57,61 @@ class MainActivity : AppCompatActivity() {
     private val vm: AppViewModel by viewModels()
     private var locked by mutableStateOf(false)
 
+    // v3.9 re-lock: before, App lock only asked when the app was started; coming back from the recent apps
+    // opened it without the fingerprint. Now it locks again after the screen went off, or after 60 s away.
+    private var leftAt = 0L
+
+    companion object {
+        /** false until the user unlocked once in this app process (a restored process starts locked again). */
+        private var unlockedInProcess = false
+    }
+    private var screenOff = false
+    private var authenticating = false
+    private val screenOffReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) { screenOff = true }
+    }
+
+    private fun canLock(): Boolean =
+        vm.appLock && BiometricManager.from(this).canAuthenticate(authenticators()) == BiometricManager.BIOMETRIC_SUCCESS
+
+    override fun onStop() {
+        super.onStop()
+        // the system PIN screen (device credential) also stops this activity: that is not "leaving the app"
+        if (!isChangingConfigurations && !authenticating) leftAt = SystemClock.elapsedRealtime()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (leftAt > 0L && !locked && canLock()) {
+            val away = SystemClock.elapsedRealtime() - leftAt
+            if (screenOff || away >= RELOCK_AFTER_MS) locked = true
+        }
+        leftAt = 0L
+        screenOff = false
+    }
+
+    override fun onDestroy() {
+        runCatching { unregisterReceiver(screenOffReceiver) }
+        super.onDestroy()
+    }
+
+    /** v3.9: with App lock on, the app's screens are hidden in the recent apps and cannot be screenshotted. */
+    private fun applySecureFlag(on: Boolean) {
+        if (on) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        if (savedInstanceState == null && vm.appLock) {
-            val can = BiometricManager.from(this).canAuthenticate(authenticators()) == BiometricManager.BIOMETRIC_SUCCESS
-            locked = can
-        }
+        // locked at every new start of the app process - also when Android restores the app after closing it in
+        // the background (then savedInstanceState is not null, which the old check let through unlocked)
+        if (!unlockedInProcess && canLock()) locked = true else unlockedInProcess = true
+        applySecureFlag(vm.appLock)
+        ContextCompat.registerReceiver(
+            this, screenOffReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF), ContextCompat.RECEIVER_NOT_EXPORTED
+        )
         if (savedInstanceState == null) handleShare(intent)
 
         setContent {
@@ -74,12 +126,24 @@ class MainActivity : AppCompatActivity() {
                 ic.isAppearanceLightStatusBars = !dark
                 ic.isAppearanceLightNavigationBars = !dark
             }
+            LaunchedEffect(vm.appLock) { applySecureFlag(vm.appLock) }
+            LaunchedEffect(locked) { vm.uiLocked = locked }
             CamPDFTheme(darkTheme = dark) {
-                if (locked) {
-                    LaunchedEffect(Unit) { promptUnlock() }
-                    LockScreen { promptUnlock() }
-                } else {
+                // v3.9: the app stays underneath the lock screen (an open scan, a picker result are not lost);
+                // the lock screen covers it completely and takes every touch and the back button.
+                Box(Modifier.fillMaxSize()) {
                     Root(vm)
+                    if (locked) {
+                        LaunchedEffect(Unit) { promptUnlock() }
+                        BackHandler { moveTaskToBack(true) }
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
+                        ) {
+                            LockScreen { promptUnlock() }
+                        }
+                    }
                 }
             }
         }
@@ -112,10 +176,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun promptUnlock() {
+        if (authenticating) return
+        authenticating = true
         val executor = ContextCompat.getMainExecutor(this)
         val prompt = BiometricPrompt(this, executor, object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                authenticating = false
+                unlockedInProcess = true
                 locked = false
+            }
+
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                authenticating = false
             }
         })
         val builder = BiometricPrompt.PromptInfo.Builder()
@@ -172,3 +244,6 @@ private fun Root(vm: AppViewModel) {
     }
     }
 }
+
+/** App lock: locks again when the app was away this long (or the screen went off meanwhile). */
+private const val RELOCK_AFTER_MS = 60_000L

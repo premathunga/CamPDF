@@ -58,7 +58,6 @@
     <string name="filter_original">அசல்</string>
     <string name="filter_magic">மேஜிக்</string>
     <string name="filter_bw">கருப்பு-வெள்ளை</string>
-    <string name="filter_gray">சாம்பல்</string>
     <string name="filter_lighten">பிரகாசம்</string>
     <string name="discard_title">ஸ்கேனை நிராகரிக்கவா?</string>
     <string name="discard_msg">ஸ்கேன் செய்த பக்கங்கள் இன்னும் PDF ஆக சேமிக்கப்படவில்லை.</string>
@@ -94,7 +93,7 @@
     <string name="remove_fingers">விரல்களை நீக்கு</string>
     <string name="remove_fingers_d">பக்கத்தைப் பிடித்திருக்கும் விரல்களை வெள்ளையாக்கும்</string>
     <string name="app_lock">ஆப் பூட்டு</string>
-    <string name="app_lock_d">CamPDF-ஐ திறக்க கைரேகை அல்லது திரைப் பூட்டு தேவை</string>
+    <string name="app_lock_d">CamPDF ஐத் திறக்க கைரேகை அல்லது திரைப் பூட்டு – திரை அணைந்த பின் அல்லது 1 நிமிடம் வெளியே இருந்த பின் மீண்டும். சமீபத்திய பயன்பாடுகளில் ஆவணங்களை மறைக்கும், திரைப்பிடிப்பைத் தடுக்கும்.</string>
     <string name="app_lock_unavailable">முதலில் தொலைபேசி அமைப்புகளில் கைரேகை அல்லது திரைப் பூட்டை அமைக்கவும்.</string>
     <string name="offline_title">ஆஃப்லைன் &amp; தனிப்பட்டது</string>
     <string name="offline_desc">CamPDF-க்கு இணைய அனுமதியோ டிராக்கர்களோ இல்லை. உங்கள் கோப்புகள் இந்த தொலைபேசியின் ஆப் சேமிப்பகத்திலேயே இருக்கும்.</string>
@@ -121,8 +120,6 @@
     <string name="tools">கருவிகள்</string>
     <string name="tool_id_card">அடையாள அட்டை</string>
     <string name="tool_password">பூட்டு</string>
-    <string name="id_front">அடையாள அட்டை · முன்பக்கம்</string>
-    <string name="id_back">அடையாள அட்டை · பின்பக்கம்</string>
     <string name="id_scan_back">முன்பக்கம் முடிந்தது – இப்போது பின்பக்கத்தை ஸ்கேன் செய்யவும்</string>
     <string name="id_banner">அடையாள அட்டை: முன் மற்றும் பின் பக்கங்கள் ஒரே A4 பக்கத்தில் உண்மையான அளவில் (85.6 × 54 mm). 100% / Actual size இல் அச்சிடவும்.</string>
     <string name="lock_title">கடவுச்சொல்லால் பூட்டு</string>
@@ -195,4 +192,16 @@
     <string name="id_import">இறக்கு</string>
     <string name="id_import_hint">இறக்கும்போது: முதலில் முன்பக்கப் படத்தையும், பின்னர் பின்பக்கப் படத்தையும் தேர்ந்தெடுக்கவும்.</string>
     <string name="back">பின்செல்</string>
+    <string name="backup_title">காப்புப்பிரதி</string>
+    <string name="backup_desc">உங்கள் ஆவணங்கள் இந்த தொலைபேசியில் CamPDF இல் மட்டுமே உள்ளன: எந்த மேகக்கணிக்கும் காப்புப்பிரதி எடுக்கப்படாது, புதிய தொலைபேசிக்கு நகலெடுக்கப்படாது. தொலைபேசியை மீட்டமைக்கும் / மாற்றும் முன் ஒரு கோப்புறைக்கு ஏற்றுமதி செய்யவும் (கருவிகள் → PDF இறக்கு மூலம் மீண்டும் பெறலாம்).</string>
+    <string name="export_all">அனைத்து ஆவணங்களையும் ஏற்றுமதி செய்</string>
+    <string name="exported_all">%1$d ஆவணங்கள் ஏற்றுமதி செய்யப்பட்டன</string>
+    <string name="too_large">இந்த ஆவணம் இந்த தொலைபேசியின் நினைவகத்திற்கு மிகப் பெரியது.</string>
+    <string name="session_restored">சேமிக்காத ஸ்கேன் மீட்டெடுக்கப்பட்டது (%1$d பக்கங்கள்)</string>
+    <string name="close">மூடு</string>
+    <string name="flash">ஃபிளாஷ்</string>
+    <string name="more_options">மேலும் விருப்பங்கள்</string>
+    <string name="select">தேர்ந்தெடு</string>
+    <string name="show_password">கடவுச்சொல்லைக் காட்டு</string>
+    <string name="take_photo">புகைப்படம் எடு</string>
 </resources>

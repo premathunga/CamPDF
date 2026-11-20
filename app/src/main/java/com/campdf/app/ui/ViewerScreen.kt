@@ -91,9 +91,9 @@ fun ViewerScreen(vm: AppViewModel) {
                     fontSize = 13.sp
                 )
             }
-            IconButton(onClick = { sharePdf(ctx, vm, doc.file) }) { Icon(Icons.Rounded.Share, null) }
-            IconButton(onClick = { vm.editDoc(doc) }) { Icon(Icons.Rounded.Edit, null, tint = c.primary) }
-            IconButton(onClick = { openPdf(ctx, vm, doc.file) }) { Icon(Icons.Rounded.OpenInNew, null) }
+            IconButton(onClick = { sharePdf(ctx, vm, doc.file) }) { Icon(Icons.Rounded.Share, stringResource(R.string.share)) }
+            IconButton(onClick = { vm.editDoc(doc) }) { Icon(Icons.Rounded.Edit, stringResource(R.string.edit_pages), tint = c.primary) }
+            IconButton(onClick = { openPdf(ctx, vm, doc.file) }) { Icon(Icons.Rounded.OpenInNew, stringResource(R.string.open)) }
         }
 
         Box(Modifier.weight(1f).fillMaxWidth()) {

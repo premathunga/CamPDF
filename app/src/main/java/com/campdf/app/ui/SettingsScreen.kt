@@ -20,7 +20,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.SaveAlt
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +50,9 @@ import java.util.Locale
 fun SettingsScreen(vm: AppViewModel) {
     val c = MaterialTheme.colorScheme
     val ctx = LocalContext.current
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
+        if (tree != null) vm.exportAll(tree)
+    }
 
     val tag = AppCompatDelegate.getApplicationLocales().toLanguageTags()
     val lang = if (tag.isNotEmpty()) tag.substringBefore('-') else Locale.getDefault().language
@@ -111,6 +117,24 @@ fun SettingsScreen(vm: AppViewModel) {
                             if (ok) vm.updateAppLock(true)
                             else Toast.makeText(ctx, R.string.app_lock_unavailable, Toast.LENGTH_LONG).show()
                         }
+                    }
+                }
+            }
+
+            // v3.9 backup: documents never leave the phone by themselves - this is how the user keeps a copy
+            AppCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Label(stringResource(R.string.backup_title))
+                    Spacer(Modifier.height(4.dp))
+                    Text(stringResource(R.string.backup_desc), color = c.onSurfaceVariant, fontSize = 13.sp, lineHeight = 19.sp)
+                    Spacer(Modifier.height(10.dp))
+                    SecondaryButton(
+                        stringResource(R.string.export_all),
+                        Modifier.fillMaxWidth(),
+                        icon = Icons.Rounded.SaveAlt
+                    ) {
+                        if (vm.docs.isEmpty()) Toast.makeText(ctx, R.string.empty_title, Toast.LENGTH_SHORT).show()
+                        else folderPicker.launch(null)
                     }
                 }
             }

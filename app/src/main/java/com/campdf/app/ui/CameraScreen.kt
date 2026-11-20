@@ -74,6 +74,8 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -262,7 +264,7 @@ private fun CameraBody(vm: AppViewModel, galleryOpen: Boolean, onGallery: () -> 
     }
     // the camera may only take a picture by itself 1.5 s after it opened (time to bring the page into view)
     var openedAt by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
-    val active = resumed && !galleryOpen && !vm.busy
+    val active = resumed && !galleryOpen && !vm.busy && !vm.uiLocked
     LaunchedEffect(active) {
         if (!capturing) paused.set(!active)
         tracker.reset()
@@ -341,7 +343,7 @@ private fun CameraBody(vm: AppViewModel, galleryOpen: Boolean, onGallery: () -> 
             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { vm.onBack() }) { Icon(Icons.Rounded.Close, null, tint = Color.White) }
+            IconButton(onClick = { vm.onBack() }) { Icon(Icons.Rounded.Close, stringResource(R.string.close), tint = Color.White) }
             Box(Modifier.weight(1f))
             if (liveOn) {
                 // auto-capture switch
@@ -359,7 +361,7 @@ private fun CameraBody(vm: AppViewModel, galleryOpen: Boolean, onGallery: () -> 
             IconButton(onClick = { torch = !torch }) {
                 Icon(
                     if (torch) Icons.Rounded.FlashOn else Icons.Rounded.FlashOff,
-                    null,
+                    stringResource(R.string.flash),
                     tint = if (torch) c.tertiary else Color.White
                 )
             }
@@ -460,9 +462,10 @@ private fun CameraBody(vm: AppViewModel, galleryOpen: Boolean, onGallery: () -> 
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             IconButton(onClick = onGallery, modifier = Modifier.size(56.dp), enabled = !capturing) {
-                Icon(Icons.Rounded.PhotoLibrary, null, tint = Color.White, modifier = Modifier.size(30.dp))
+                Icon(Icons.Rounded.PhotoLibrary, stringResource(R.string.import_image), tint = Color.White, modifier = Modifier.size(30.dp))
             }
             Box(Modifier.size(78.dp), contentAlignment = Alignment.Center) {
+                val shutterLabel = stringResource(R.string.take_photo)
                 Box(
                     Modifier
                         .size(78.dp)
@@ -471,7 +474,8 @@ private fun CameraBody(vm: AppViewModel, galleryOpen: Boolean, onGallery: () -> 
                         .padding(7.dp)
                         .clip(CircleShape)
                         .background(c.primary)
-                        .clickable(enabled = !capturing) { capture() },
+                        .clickable(enabled = !capturing, onClickLabel = shutterLabel) { capture() }
+                        .semantics { contentDescription = shutterLabel },
                     contentAlignment = Alignment.Center
                 ) {
                     if (capturing) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(30.dp))

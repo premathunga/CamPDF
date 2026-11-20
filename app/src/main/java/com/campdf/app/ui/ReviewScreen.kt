@@ -140,7 +140,7 @@ fun ReviewScreen(vm: AppViewModel) {
                         .clickable { vm.startScan() },
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Rounded.AddAPhoto, null, tint = c.primary, modifier = Modifier.size(28.dp))
+                    Icon(Icons.Rounded.AddAPhoto, stringResource(R.string.add_page), tint = c.primary, modifier = Modifier.size(28.dp))
                 }
             }
         }

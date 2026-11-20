@@ -58,7 +58,6 @@
     <string name="filter_original">මුල්</string>
     <string name="filter_magic">Magic</string>
     <string name="filter_bw">කළු-සුදු</string>
-    <string name="filter_gray">අළු</string>
     <string name="filter_lighten">ආලෝකමත්</string>
     <string name="discard_title">ස්කෑන් එක ඉවත දමන්නද?</string>
     <string name="discard_msg">ඔබේ ස්කෑන් කළ පිටු තවම PDF ලෙස සුරැකී නැත.</string>
@@ -94,7 +93,7 @@
     <string name="remove_fingers">ඇඟිලි ඉවත් කරන්න</string>
     <string name="remove_fingers_d">පිටුව අල්ලාගත් ඇඟිලි සුදු පාටින් වසා දමයි</string>
     <string name="app_lock">යෙදුම් අගුල</string>
-    <string name="app_lock_d">CamPDF විවෘත කිරීමට ඇඟිලි සලකුණ හෝ තිර අගුල අවශ්‍යයි</string>
+    <string name="app_lock_d">CamPDF විවෘත කිරීමට ඇඟිලි සලකුණ හෝ screen lock – screen එක off වූ පසු හෝ මිනිත්තුවක් ඉවත්ව සිටි පසුත් නැවත. Recent apps තුළ ලේඛන සඟවයි, screenshot අවහිර කරයි.</string>
     <string name="app_lock_unavailable">පළමුව දුරකථන සැකසුම්වල ඇඟිලි සලකුණ හෝ තිර අගුලක් සකසන්න.</string>
     <string name="offline_title">නොබැඳි සහ පෞද්ගලික</string>
     <string name="offline_desc">CamPDF හට අන්තර්ජාල අවසරයක් හෝ ට්‍රැකර් නැත. ඔබේ ගොනු මෙම දුරකථනයේ යෙදුම් ගබඩාවේම පවතී.</string>
@@ -121,8 +120,6 @@
     <string name="tools">මෙවලම්</string>
     <string name="tool_id_card">හැඳුනුම්පත</string>
     <string name="tool_password">අගුළු</string>
-    <string name="id_front">හැඳුනුම්පත · ඉදිරිපස</string>
-    <string name="id_back">හැඳුනුම්පත · පසුපස</string>
     <string name="id_scan_back">ඉදිරිපස හරි – දැන් පසුපස scan කරන්න</string>
     <string name="id_banner">හැඳුනුම්පත: ඉදිරිපස සහ පසුපස එකම A4 පිටුවක, කාඩ් එකේ නියම ප්‍රමාණයෙන් (85.6 × 54 mm). Print කරන්නේ 100% / Actual size ලෙසයි.</string>
     <string name="lock_title">මුරපදයකින් අගුළු දමන්න</string>
@@ -195,4 +192,16 @@
     <string name="id_import">Photo ගන්න</string>
     <string name="id_import_hint">Photo ගන්නකොට: මුලින් ඉදිරිපස photo එක, ඊට පස්සේ පසුපස photo එක තෝරන්න.</string>
     <string name="back">ආපසු</string>
+    <string name="backup_title">Backup</string>
+    <string name="backup_desc">ඔබේ ලේඛන ගබඩා වී ඇත්තේ මෙම phone එකේ CamPDF තුළ පමණි: කිසිම cloud එකකට backup වන්නේවත්, අලුත් phone එකකට copy වන්නේවත් නැත. Phone එක reset කිරීමට හෝ මාරු කිරීමට පෙර folder එකකට export කරගන්න (Tools → PDF ගන්න මගින් ආපසු ගත හැක).</string>
+    <string name="export_all">සියලු ලේඛන export කරන්න</string>
+    <string name="exported_all">ලේඛන %1$d ක් export කළා</string>
+    <string name="too_large">මෙම ලේඛනය මෙම phone එකේ memory එකට විශාල වැඩියි.</string>
+    <string name="session_restored">Save නොකළ scan එක ආපසු ගත්තා (පිටු %1$d)</string>
+    <string name="close">වසන්න</string>
+    <string name="flash">Flash</string>
+    <string name="more_options">තවත් විකල්ප</string>
+    <string name="select">තෝරන්න</string>
+    <string name="show_password">මුරපදය පෙන්වන්න</string>
+    <string name="take_photo">Photo එක ගන්න</string>
 </resources>

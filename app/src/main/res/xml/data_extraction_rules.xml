@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  v3.9 backup policy: CamPDF's documents (letterheads, signatures, seals, ID copies) never leave the phone by
+  themselves - neither to a cloud backup nor when the phone's data is copied to a new phone (Android 12+ copies app
+  data in a device-to-device transfer even with allowBackup="false" unless it is excluded here).
+  To keep documents, use Settings -> Export all documents (a folder the user chooses), and Tools -> Import files.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+    </device-transfer>
+</data-extraction-rules>

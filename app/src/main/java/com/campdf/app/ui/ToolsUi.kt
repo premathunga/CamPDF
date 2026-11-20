@@ -550,7 +550,7 @@ fun LockPdfHost(vm: AppViewModel, doc: DocItem?, onClose: () -> Unit) {
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     trailingIcon = {
                         IconButton(onClick = { show = !show }) {
-                            Icon(if (show) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility, null)
+                            Icon(if (show) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility, stringResource(R.string.show_password))
                         }
                     },
                     supportingText = { if (pw.isNotEmpty() && tooShort) Text(stringResource(R.string.lock_short)) },

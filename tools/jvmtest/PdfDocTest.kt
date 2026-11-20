@@ -27,5 +27,5 @@ fun main(a: Array<String>) {
     val rm = PdfDoc.readPages(File("merged.pdf"))!!
     check(rm.size == 3 && rm[2].box!!.contentEquals(rb[0].box!!)) { "geometry kept through a second round" }
     println("PASS read/merge/reorder/extract; boxes: " + merged.joinToString { it.box!!.joinToString(",") })
-    println("not ours -> " + PdfDoc.readPages("%PDF-1.4 hello".toByteArray()))
+    println("not ours -> " + PdfDoc.readPages(File("notours.pdf").apply { writeText("%PDF-1.4 hello") }))
 }

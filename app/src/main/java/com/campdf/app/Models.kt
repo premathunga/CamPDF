@@ -9,7 +9,7 @@ enum class Screen { Welcome, Home, Viewer, Camera, Crop, Review, SignPad, SignPl
 /** v3.6 page tools on a saved document: pick pages to extract, or tap pages in their new order. */
 enum class PageToolMode { EXTRACT, REORDER }
 
-class PageToolState(val doc: DocItem, val mode: PageToolMode, val pages: List<PdfPage>)
+class PageToolState(val doc: DocItem, val mode: PageToolMode, val pages: PageSource)
 
 /**
  * One scanned page.
@@ -25,7 +25,9 @@ data class PageItem(
     val rotation: Int = 0,
     val filter: FilterMode = FilterMode.MAGIC,
     val rev: Int = 0,
-    val stamps: List<SigStamp> = emptyList()
+    val stamps: List<SigStamp> = emptyList(),
+    /** v3.9: the page is a whole A4 sheet at true scale (re-opened ID copy) - saved without the A4 margin. */
+    val exactA4: Boolean = false
 )
 
 /** A signature placed on a page: centre (fx, fy) and width fw as fractions of the page; drawn after the filter. */

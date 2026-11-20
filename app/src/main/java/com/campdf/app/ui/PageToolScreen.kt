@@ -18,7 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -47,7 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.campdf.app.AppViewModel
 import com.campdf.app.PageToolMode
-import com.campdf.app.PdfPage
+import com.campdf.app.PageSource
 import com.campdf.app.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -69,7 +69,7 @@ fun PageToolScreen(vm: AppViewModel) {
             if (picked.isNotEmpty()) {
                 TextButton(onClick = { picked = emptyList() }) { Text(stringResource(R.string.clear)) }
             } else if (extract) {
-                TextButton(onClick = { picked = st.pages.indices.toList() }) { Text(stringResource(R.string.select_all)) }
+                TextButton(onClick = { picked = (0 until st.pages.count).toList() }) { Text(stringResource(R.string.select_all)) }
             }
         }
         Text(
@@ -85,9 +85,9 @@ fun PageToolScreen(vm: AppViewModel) {
             verticalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.weight(1f)
         ) {
-            itemsIndexed(st.pages) { i, p ->
+            items(st.pages.count) { i ->
                 val pos = picked.indexOf(i)
-                PageCell(p, i, pos, extract) {
+                PageCell(st.pages, i, pos, extract) {
                     picked = if (pos >= 0) picked - i else picked + i
                 }
             }
@@ -100,17 +100,19 @@ fun PageToolScreen(vm: AppViewModel) {
             enabled = n > 0
         ) {
             if (extract) vm.extractPages(picked)
-            else vm.reorderPages(picked + st.pages.indices.filter { it !in picked })
+            else vm.reorderPages(picked + (0 until st.pages.count).filter { it !in picked })
         }
     }
 }
 
 @Composable
-private fun PageCell(p: PdfPage, index: Int, pos: Int, extract: Boolean, onClick: () -> Unit) {
+private fun PageCell(src: PageSource, index: Int, pos: Int, extract: Boolean, onClick: () -> Unit) {
     val c = MaterialTheme.colorScheme
-    val img by produceState<ImageBitmap?>(null, p) {
-        value = withContext(Dispatchers.Default) {
+    // v3.9: each thumbnail reads only its own page from the file
+    val img by produceState<ImageBitmap?>(null, src, index) {
+        value = withContext(Dispatchers.IO) {
             runCatching {
+                val p = src.page(index)
                 val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeByteArray(p.jpeg, 0, p.jpeg.size, o)
                 var s = 1
@@ -119,7 +121,7 @@ private fun PageCell(p: PdfPage, index: Int, pos: Int, extract: Boolean, onClick
             }.getOrNull()
         }
     }
-    val box = p.box
+    val box = remember(src, index) { runCatching { src.box(index) }.getOrNull() }
     val aspect = if (box != null && box[1] > 0f) box[0] / box[1] else 0.707f
     val shape = RoundedCornerShape(10.dp)
     val on = pos >= 0

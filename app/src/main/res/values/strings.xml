@@ -59,7 +59,6 @@
     <string name="filter_original">Original</string>
     <string name="filter_magic">Magic</string>
     <string name="filter_bw">B&amp;W</string>
-    <string name="filter_gray">Gray</string>
     <string name="filter_lighten">Lighten</string>
     <string name="discard_title">Discard scan?</string>
     <string name="discard_msg">Your scanned pages have not been saved as a PDF yet.</string>
@@ -95,7 +94,7 @@
     <string name="remove_fingers">Remove fingers</string>
     <string name="remove_fingers_d">Whitens fingers or thumbs that hold the page at its edge</string>
     <string name="app_lock">App lock</string>
-    <string name="app_lock_d">Require fingerprint or screen lock to open CamPDF</string>
+    <string name="app_lock_d">Fingerprint or screen lock to open CamPDF – again after the screen was off or 1 minute away. Hides the documents in recent apps and blocks screenshots.</string>
     <string name="app_lock_unavailable">Set up a fingerprint or screen lock in phone settings first.</string>
     <string name="offline_title">Offline &amp; private</string>
     <string name="offline_desc">CamPDF has no internet permission and no trackers. Your files stay in the app storage on this phone.</string>
@@ -122,8 +121,6 @@
     <string name="tools">Tools</string>
     <string name="tool_id_card">ID card</string>
     <string name="tool_password">Lock</string>
-    <string name="id_front">ID card · front</string>
-    <string name="id_back">ID card · back</string>
     <string name="id_scan_back">Front done – now scan the back side</string>
     <string name="id_banner">ID card: the front and back go on one A4 page at real card size (85.6 × 54 mm). Print at 100% / actual size.</string>
     <string name="lock_title">Lock with password</string>
@@ -196,4 +193,16 @@
     <string name="id_import">Import</string>
     <string name="id_import_hint">Import: choose the front photo first, then the back.</string>
     <string name="back">Back</string>
+    <string name="backup_title">Backup</string>
+    <string name="backup_desc">Your documents are kept only inside CamPDF on this phone: they are not backed up to any cloud and are not copied to a new phone. Export them to a folder before resetting or changing the phone (Tools → Import files brings them back).</string>
+    <string name="export_all">Export all documents</string>
+    <string name="exported_all">%1$d documents exported</string>
+    <string name="too_large">The document is too large for this phone\'s memory.</string>
+    <string name="session_restored">Your unsaved scan was restored (%1$d pages)</string>
+    <string name="close">Close</string>
+    <string name="flash">Flash</string>
+    <string name="more_options">More options</string>
+    <string name="select">Select</string>
+    <string name="show_password">Show password</string>
+    <string name="take_photo">Take photo</string>
 </resources>

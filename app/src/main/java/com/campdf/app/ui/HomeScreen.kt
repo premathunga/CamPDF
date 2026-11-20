@@ -186,7 +186,7 @@ fun HomeScreen(vm: AppViewModel) {
                     }
                 }
                 IconButton(onClick = { vm.screen = Screen.Settings }) {
-                    Icon(Icons.Rounded.Settings, null, tint = c.onSurface)
+                    Icon(Icons.Rounded.Settings, stringResource(R.string.settings), tint = c.onSurface)
                 }
             }
             }
@@ -204,39 +204,43 @@ fun HomeScreen(vm: AppViewModel) {
                 ),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
             )
-            if (!selecting) {
-                ToolsGrid(tools) { vm.screen = Screen.Tools }
-                Spacer(Modifier.height(4.dp))
-            }
-            if (list.isEmpty()) {
-                Column(
-                    Modifier.fillMaxSize().padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Icon(Icons.Rounded.Description, null, tint = c.onSurfaceVariant, modifier = Modifier.size(64.dp))
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        stringResource(if (all.isEmpty()) R.string.empty_title else R.string.no_results),
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = c.onSurface
-                    )
-                    if (all.isEmpty()) {
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            stringResource(R.string.empty_desc),
-                            color = c.onSurfaceVariant,
-                            textAlign = TextAlign.Center
-                        )
+            // v3.9: the tools scroll away with the list (before they stayed fixed and left little room for the
+            // documents on small screens)
+            LazyColumn(
+                contentPadding = PaddingValues(top = 4.dp, bottom = 120.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                if (!selecting) {
+                    item(key = "tools") { ToolsGrid(tools) { vm.screen = Screen.Tools } }
+                }
+                if (list.isEmpty()) {
+                    item(key = "empty") {
+                        Column(
+                            Modifier.fillMaxWidth().padding(32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(Icons.Rounded.Description, null, tint = c.onSurfaceVariant, modifier = Modifier.size(64.dp))
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                stringResource(if (all.isEmpty()) R.string.empty_title else R.string.no_results),
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = c.onSurface
+                            )
+                            if (all.isEmpty()) {
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    stringResource(R.string.empty_desc),
+                                    color = c.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
                     }
                 }
-            } else {
-                LazyColumn(
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(list, key = { it.file.name }) { doc ->
+                items(list, key = { it.file.name }) { doc ->
+                    Box(Modifier.padding(horizontal = 16.dp)) {
                         DocRow(
                             doc,
                             selecting = selecting,
@@ -400,12 +404,12 @@ private fun DocRow(
             IconButton(onClick = onToggle) {
                 Icon(
                     if (isSelected) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank,
-                    null,
+                    stringResource(R.string.select),
                     tint = if (isSelected) c.primary else c.onSurfaceVariant
                 )
             }
             if (!selecting) Box {
-                IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, null, tint = c.onSurfaceVariant) }
+                IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, stringResource(R.string.more_options), tint = c.onSurfaceVariant) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.share)) },

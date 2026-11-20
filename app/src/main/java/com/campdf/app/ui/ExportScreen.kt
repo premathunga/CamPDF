@@ -119,7 +119,7 @@ fun ExportScreen(vm: AppViewModel) {
                         IconButton(
                             onClick = { if (name.isNotBlank()) vm.renameExported(name) },
                             enabled = name.isNotBlank() && name != doc.name
-                        ) { Icon(Icons.Rounded.Check, null, tint = c.primary) }
+                        ) { Icon(Icons.Rounded.Check, stringResource(R.string.rename), tint = c.primary) }
                     }
                     Spacer(Modifier.height(14.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {

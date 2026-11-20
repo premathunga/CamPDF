@@ -11,8 +11,8 @@ android {
         applicationId = "com.campdf.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 383
-        versionName = "3.8.3"
+        versionCode = 390
+        versionName = "3.9.0"
         resourceConfigurations += listOf("en", "si", "ta")
     }
 
@@ -62,7 +62,6 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("androidx.biometric:biometric:1.1.0")

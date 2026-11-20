@@ -330,3 +330,26 @@ Tools -> ID card now opens an ID copy screen first:
   the source PNG. Camera + PDF badge sit inside the 66 dp safe circle (looks right as circle, squircle or rounded
   square). The old vector is kept as the monochrome layer for Android 13+ themed icons.
 - `fastlane/metadata/android/en-US/images/icon.png` (512 px): store / F-Droid listing icon - not part of the APK.
+
+## v3.9.0 - review fixes (security, reliability, memory, quality)
+Security
+- **App lock locks again** after the screen was turned off or the app was away for 1 minute (before: only when the
+  app was started). The app stays underneath the lock screen, so an open scan or a picker result is not lost.
+- With App lock on, the app is hidden in the recent-apps preview and screenshots are blocked (`FLAG_SECURE`).
+- **Backup policy**: documents are excluded from cloud backup *and* from the Android 12+ device-to-device copy
+  (`res/xml/data_extraction_rules.xml`). Settings -> **Export all documents** copies every PDF to a folder the user
+  picks (phone, SD card, USB stick); Tools -> Import files brings them back.
+Bugs
+- Re-opening an ID copy (Edit pages / Sign) no longer shrinks the card by 4%: full-A4 sheets keep `exactA4`.
+- An unsaved scan survives Android closing the app in the background (low-memory phones): it is saved to
+  `session.json` after every change and comes back on the Review screen. Leftover page images from a crash are deleted.
+- Long documents: `PdfFile` (shared reader) reads objects straight from the file; merge, extract, reorder,
+  compress, PDF to images, print and lock now handle **one page at a time** (`PageSource`) instead of the whole file.
+- Home: the tools grid scrolls away with the document list.
+- After "Create PDF", going back and creating again updates the same file instead of making a copy.
+Quality
+- `PdfCrypt` and `PdfDoc` use one PDF reader (`PdfFile.kt`).
+- GitHub Actions: new **tests** job (PdfWriter / PdfDoc / PdfCrypt / LiveTracker, checked with qpdf + poppler),
+  a lint report artifact and the APK size in the run summary (`tools/jvmtest/PdfTests.kt`).
+- Screen-reader labels for all icon-only buttons and the shutter.
+- Removed unused strings and the Material Components library (theme now `Theme.AppCompat.DayNight.NoActionBar`).

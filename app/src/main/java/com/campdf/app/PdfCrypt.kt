@@ -1,7 +1,10 @@
 package com.campdf.app
 
+import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
+import java.io.OutputStream
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Locale
@@ -104,80 +107,6 @@ object PdfCrypt {
         return dict to fileKey
     }
 
-    // ---------- reading our own PDF files ----------
-
-    private class Obj(val num: Int, val dict: String, val stream: ByteArray?)
-
-    private fun latin(b: ByteArray, from: Int, to: Int) = String(b, from, to - from, Charsets.ISO_8859_1)
-
-    private fun indexOf(b: ByteArray, pat: String, from: Int): Int {
-        val p = pat.toByteArray(Charsets.ISO_8859_1)
-        var i = from
-        val last = b.size - p.size
-        outer@ while (i <= last) {
-            for (j in p.indices) if (b[i + j] != p[j]) { i++; continue@outer }
-            return i
-        }
-        return -1
-    }
-
-    private fun lastIndexOf(b: ByteArray, pat: String): Int {
-        val p = pat.toByteArray(Charsets.ISO_8859_1)
-        var i = b.size - p.size
-        outer@ while (i >= 0) {
-            for (j in p.indices) if (b[i + j] != p[j]) { i--; continue@outer }
-            return i
-        }
-        return -1
-    }
-
-    /** Objects via the classic xref table (the only kind PdfWriter writes); stream lengths are direct numbers. */
-    private fun parse(b: ByteArray): Triple<List<Obj>, String, String?> {
-        val sx = lastIndexOf(b, "startxref")
-        require(sx > 0) { "no startxref" }
-        val xrefPos = Regex("""startxref\s+(\d+)""").find(latin(b, sx, b.size))!!.groupValues[1].toInt()
-        val tr = indexOf(b, "trailer", xrefPos)
-        require(tr > 0) { "no trailer" }
-        val table = latin(b, xrefPos, tr)
-        val trailer = latin(b, tr, sx)
-        require(!trailer.contains("/Encrypt")) { "already encrypted" }
-        val lines = table.lines().map { it.trim() }.filter { it.isNotEmpty() }
-        require(lines[0] == "xref")
-        val offsets = HashMap<Int, Int>()
-        var i = 1
-        while (i < lines.size) {
-            val hdr = lines[i].split(Regex("\\s+"))
-            val start = hdr[0].toInt()
-            val count = hdr[1].toInt()
-            for (k in 0 until count) {
-                val e = lines[i + 1 + k].split(Regex("\\s+"))
-                if (e[2] == "n") offsets[start + k] = e[0].toInt()
-            }
-            i += 1 + count
-        }
-        val root = Regex("""/Root\s+(\d+\s+\d+\s+R)""").find(trailer)!!.groupValues[1]
-        val info = Regex("""/Info\s+(\d+\s+\d+\s+R)""").find(trailer)?.groupValues?.get(1)
-        val objs = offsets.keys.sorted().map { num ->
-            val at = offsets[num]!!
-            val head = Regex("""^\s*(\d+)\s+(\d+)\s+obj""").find(latin(b, at, minOf(b.size, at + 40)))!!
-            require(head.groupValues[1].toInt() == num) { "xref mismatch" }
-            val bodyStart = at + head.range.last + 1
-            val endobj = indexOf(b, "endobj", bodyStart)
-            val st = indexOf(b, "stream", bodyStart)
-            if (st in 0 until endobj) {
-                val dict = latin(b, bodyStart, st).trim()
-                val len = Regex("""/Length\s+(\d+)(?!\s+\d+\s+R)""").find(dict)!!.groupValues[1].toInt()
-                var ds = st + 6
-                if (b[ds] == '\r'.code.toByte()) ds++
-                if (b[ds] == '\n'.code.toByte()) ds++
-                Obj(num, dict, b.copyOfRange(ds, ds + len))
-            } else {
-                Obj(num, latin(b, bodyStart, endobj).trim(), null)
-            }
-        }
-        return Triple(objs, root, info)
-    }
-
     /** Replaces every literal string (...) in an object by its encrypted hex form. */
     private fun encryptStrings(s: String, key: ByteArray): String {
         val out = StringBuilder()
@@ -232,54 +161,68 @@ object PdfCrypt {
 
     /**
      * Writes [dst] = [src] locked with [password] (AES-256). [src] must be a CamPDF document (PdfWriter output).
-     * Throws when the source cannot be read.
+     * v3.9: objects are read one at a time from the file and written straight to [dst] (no whole-file copy in
+     * memory), so long documents can be locked too. Throws when the source cannot be read.
      */
     fun lock(src: File, dst: File, password: String) {
         require(password.isNotEmpty())
-        val (objs, root, info) = parse(src.readBytes())
-        // owner password: random, so nobody can "unlock" restrictions without the user password
-        val (encDict, key) = securityHandler(password, random(32))
-        val maxNum = objs.maxOf { it.num }
-        val encNum = maxNum + 1
-        val offsets = LongArray(encNum + 1)
-        val out = ByteArrayOutputStream(src.length().toInt() + 64 * 1024)
-        fun w(s: String) = out.write(s.toByteArray(Charsets.ISO_8859_1))
-        w("%PDF-1.7\n")
-        out.write(byteArrayOf('%'.code.toByte(), 0xE2.toByte(), 0xE3.toByte(), 0xCF.toByte(), 0xD3.toByte(), '\n'.code.toByte()))
-        for (o in objs) {
-            offsets[o.num] = out.size().toLong()
-            w("${o.num} 0 obj\n")
-            if (o.stream != null) {
-                val enc = encryptData(key, o.stream)
-                val d = encryptStrings(o.dict, key).replace(Regex("""/Length\s+\d+"""), "/Length ${enc.size}")
-                w("$d\nstream\n")
-                out.write(enc)
-                w("\nendstream\nendobj\n")
-            } else {
-                var d = encryptStrings(o.dict, key)
-                if (Regex("""/Type\s*/Catalog""").containsMatchIn(d) && !d.contains("/Extensions")) {
-                    // marks the AES-256 (revision 6) extension for older readers
-                    val end = d.lastIndexOf(">>")
-                    d = d.substring(0, end) + "/Extensions << /ADBE << /BaseVersion /1.7 /ExtensionLevel 8 >> >> " + d.substring(end)
+        val tmp = File(dst.parentFile, "." + dst.name + ".tmp")
+        PdfFile(src).use { pdf ->
+            require(!pdf.trailer.contains("/Encrypt")) { "already encrypted" }
+            val root = Regex("""/Root\s+(\d+\s+\d+\s+R)""").find(pdf.trailer)!!.groupValues[1]
+            val info = Regex("""/Info\s+(\d+\s+\d+\s+R)""").find(pdf.trailer)?.groupValues?.get(1)
+            // owner password: random, so nobody can "unlock" restrictions without the user password
+            val (encDict, key) = securityHandler(password, random(32))
+            val nums = pdf.objectNumbers
+            val encNum = nums.max() + 1
+            val offsets = LongArray(encNum + 1)
+            Counting(BufferedOutputStream(FileOutputStream(tmp), 64 * 1024)).use { out ->
+                fun w(s: String) = out.write(s.toByteArray(Charsets.ISO_8859_1))
+                w("%PDF-1.7\n")
+                out.write(byteArrayOf('%'.code.toByte(), 0xE2.toByte(), 0xE3.toByte(), 0xCF.toByte(), 0xD3.toByte(), '\n'.code.toByte()))
+                for (n in nums) {
+                    val o = pdf.obj(n)
+                    offsets[n] = out.count
+                    w("$n 0 obj\n")
+                    if (o.isStream) {
+                        val enc = encryptData(key, pdf.stream(o))
+                        val d = encryptStrings(o.dict, key).replace(Regex("""/Length\s+\d+"""), "/Length ${enc.size}")
+                        w("$d\nstream\n")
+                        out.write(enc)
+                        w("\nendstream\nendobj\n")
+                    } else {
+                        var d = encryptStrings(o.dict, key)
+                        if (Regex("""/Type\s*/Catalog""").containsMatchIn(d) && !d.contains("/Extensions")) {
+                            // marks the AES-256 (revision 6) extension for older readers
+                            val end = d.lastIndexOf(">>")
+                            d = d.substring(0, end) + "/Extensions << /ADBE << /BaseVersion /1.7 /ExtensionLevel 8 >> >> " + d.substring(end)
+                        }
+                        w("$d\nendobj\n")
+                    }
                 }
-                w("$d\nendobj\n")
+                offsets[encNum] = out.count
+                w("$encNum 0 obj\n$encDict\nendobj\n")
+                val xref = out.count
+                w("xref\n0 ${encNum + 1}\n")
+                w("0000000000 65535 f \n")
+                for (n in 1..encNum) {
+                    if (offsets[n] > 0) w(String.format(Locale.US, "%010d 00000 n \n", offsets[n]))
+                    else w("0000000000 65535 f \n")
+                }
+                val id = hex(random(16))
+                w("trailer\n<< /Size ${encNum + 1} /Root $root " + (if (info != null) "/Info $info " else "") +
+                    "/Encrypt $encNum 0 R /ID [ $id $id ] >>\nstartxref\n$xref\n%%EOF\n")
             }
         }
-        offsets[encNum] = out.size().toLong()
-        w("$encNum 0 obj\n$encDict\nendobj\n")
-        val xref = out.size()
-        w("xref\n0 ${encNum + 1}\n")
-        w("0000000000 65535 f \n")
-        for (n in 1..encNum) {
-            if (offsets[n] > 0) w(String.format(Locale.US, "%010d 00000 n \n", offsets[n]))
-            else w("0000000000 65535 f \n")
-        }
-        val id = hex(random(16))
-        w("trailer\n<< /Size ${encNum + 1} /Root $root " + (if (info != null) "/Info $info " else "") +
-            "/Encrypt $encNum 0 R /ID [ $id $id ] >>\nstartxref\n$xref\n%%EOF\n")
-        val tmp = File(dst.parentFile, "." + dst.name + ".tmp")
-        tmp.writeBytes(out.toByteArray())
         if (dst.exists()) dst.delete()
         if (!tmp.renameTo(dst)) { tmp.copyTo(dst, overwrite = true); tmp.delete() }
+    }
+
+    private class Counting(private val o: OutputStream) : OutputStream() {
+        var count = 0L
+        override fun write(b: Int) { o.write(b); count++ }
+        override fun write(b: ByteArray, off: Int, len: Int) { o.write(b, off, len); count += len }
+        override fun flush() = o.flush()
+        override fun close() = o.close()
     }
 }
