@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  v3.9 app icon: one 432 px WebP (108 dp at xxxhdpi, 12 KB) - Android scales it down for other screens, so no
+  per-density copies are needed. The artwork fills the whole layer (its edges are extended and blurred), with
+  the camera / PDF inside the 66 dp safe circle, so it looks right as a circle, squircle or rounded square.
+  The old vector stays as the monochrome layer for Android 13+ themed icons.
+-->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/ic_launcher_background" />
-    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <foreground android:drawable="@mipmap/ic_launcher_art" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
 </adaptive-icon>

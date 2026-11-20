@@ -323,3 +323,10 @@ Tools -> ID card now opens an ID copy screen first:
 - The top-bar back arrow and title had no colour set and were drawn black on the dark background (invisible on
   Tools, ID card, Review, Crop, Settings...). The back arrow is now a round button in the theme's text colour, and
   the whole app sits in a Surface so text without an explicit colour follows the theme.
+
+## v3.8.3 - new app icon
+- Adaptive icon from the new artwork: a single 432 px WebP (`mipmap-xxxhdpi/ic_launcher_art.webp`, 12 KB) as the
+  full-bleed layer - Android scales it for every screen density, so the APK grows by ~12 KB instead of ~1.4 MB for
+  the source PNG. Camera + PDF badge sit inside the 66 dp safe circle (looks right as circle, squircle or rounded
+  square). The old vector is kept as the monochrome layer for Android 13+ themed icons.
+- `fastlane/metadata/android/en-US/images/icon.png` (512 px): store / F-Droid listing icon - not part of the APK.
