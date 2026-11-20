@@ -194,4 +194,5 @@
     <string name="sec_util">වෙනත්</string>
     <string name="id_import">Photo ගන්න</string>
     <string name="id_import_hint">Photo ගන්නකොට: මුලින් ඉදිරිපස photo එක, ඊට පස්සේ පසුපස photo එක තෝරන්න.</string>
+    <string name="back">ආපසු</string>
 </resources>

@@ -18,6 +18,8 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -139,6 +141,9 @@ private fun Root(vm: AppViewModel) {
         }
     }
 
+    // v3.8.2: a Surface gives every screen the theme's text / icon colour (before, text without an explicit colour
+    // - top bar titles, the back arrow - was black, invisible in the dark theme)
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
     Box(Modifier.fillMaxSize()) {
         when (vm.screen) {
             Screen.Welcome -> WelcomeScreen { vm.completeWelcome() }
@@ -164,5 +169,6 @@ private fun Root(vm: AppViewModel) {
                 contentAlignment = Alignment.Center
             ) { CircularProgressIndicator() }
         }
+    }
     }
 }

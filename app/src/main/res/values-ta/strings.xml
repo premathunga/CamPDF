@@ -194,4 +194,5 @@
     <string name="sec_util">பயன்பாடுகள்</string>
     <string name="id_import">இறக்கு</string>
     <string name="id_import_hint">இறக்கும்போது: முதலில் முன்பக்கப் படத்தையும், பின்னர் பின்பக்கப் படத்தையும் தேர்ந்தெடுக்கவும்.</string>
+    <string name="back">பின்செல்</string>
 </resources>

@@ -25,6 +25,8 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.Button
@@ -168,8 +170,17 @@ fun ScreenTopBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Start
     ) {
+        val c = MaterialTheme.colorScheme
         if (onBack != null) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, null) }
+            // v3.8.2: the back arrow and the title had no colour set and were drawn black on the dark background
+            // (invisible). Now a clearly visible round button in the theme's text colour.
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.clip(CircleShape).background(c.surfaceContainerHigh)
+            ) {
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, stringResource(R.string.back), tint = c.onSurface)
+            }
+            Spacer(Modifier.width(12.dp))
         } else {
             Spacer(Modifier.width(12.dp))
         }
@@ -177,6 +188,7 @@ fun ScreenTopBar(
             title,
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
+            color = c.onBackground,
             modifier = Modifier.weight(1f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis

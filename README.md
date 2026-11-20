@@ -318,3 +318,8 @@ Tools -> ID card now opens an ID copy screen first:
   and turned the security print of a laminated NIC strong orange / yellow; Lighten kept the card as it looks.
 - ID screen: **Import** button next to Start scanning - take the card photos from the gallery (front first, then back).
 - The "For ... only" watermark is **off** by default (the switch is remembered).
+
+## v3.8.2 - visible back button
+- The top-bar back arrow and title had no colour set and were drawn black on the dark background (invisible on
+  Tools, ID card, Review, Crop, Settings...). The back arrow is now a round button in the theme's text colour, and
+  the whole app sits in a Surface so text without an explicit colour follows the theme.
