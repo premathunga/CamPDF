@@ -11,8 +11,8 @@ android {
         applicationId = "com.campdf.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3120
-        versionName = "3.12.0"
+        versionCode = 3121
+        versionName = "3.12.1"
         resourceConfigurations += listOf("en", "si", "ta")
     }
 

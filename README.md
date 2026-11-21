@@ -401,3 +401,10 @@ Measured on the 63 real document photos and 35 background photos used throughout
 - Every screen's top bar has the same wave; Tools are grouped in cards with icon headers.
 - The bottom "Import" button label no longer gets cut off. Works on both dark and light themes.
 - Back from a document opened in All documents returns to All documents.
+
+## v3.12.1 - tighter layout (after the first phone test)
+- Home is more compact: the search moved to a search button next to Settings (it opens All documents with the
+  keyboard up), smaller tool circles and gaps, one-line document rows (date • time • size; page count as a badge on
+  the thumbnail), and the Scan / Import buttons sit on a fade so the list no longer shows through.
+- PDF created screen fits on one screen: smaller check badge and cards; Share and Save / Open / Lock are fixed at
+  the bottom above the navigation bar (before, Save / Open went under it and needed scrolling).

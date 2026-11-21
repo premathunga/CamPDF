@@ -131,24 +131,24 @@ fun ToolTile(t: ToolItem, modifier: Modifier = Modifier) {
         modifier
             .clip(RoundedCornerShape(16.dp))
             .clickable(onClick = t.onClick)
-            .padding(vertical = 6.dp, horizontal = 2.dp),
+            .padding(vertical = 4.dp, horizontal = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         // v3.12: a glowing ring + gradient-filled circle in the tool's colour (the new design)
-        Box(Modifier.size(62.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(56.dp), contentAlignment = Alignment.Center) {
             Box(Modifier.matchParentSize().clip(CircleShape).background(t.color.copy(alpha = 0.10f)))
             Box(
                 Modifier
-                    .size(52.dp)
+                    .size(47.dp)
                     .clip(CircleShape)
                     .background(Brush.linearGradient(listOf(t.color.copy(alpha = 0.42f), t.color.copy(alpha = 0.14f))))
                     .border(1.5.dp, t.color.copy(alpha = 0.55f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(t.icon, null, tint = t.color, modifier = Modifier.size(27.dp))
+                Icon(t.icon, null, tint = t.color, modifier = Modifier.size(24.dp))
             }
         }
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(4.dp))
         Text(
             stringResource(t.label),
             fontSize = 12.sp,
@@ -157,7 +157,7 @@ fun ToolTile(t: ToolItem, modifier: Modifier = Modifier) {
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
-            modifier = Modifier.height(30.dp)
+            modifier = Modifier.height(28.dp)
         )
     }
 }

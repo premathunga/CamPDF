@@ -116,7 +116,7 @@ fun ExportScreen(vm: AppViewModel) {
     }
 
     Box(Modifier.fillMaxSize().background(c.background)) {
-        WaveBackdrop(260.dp)
+        WaveBackdrop(220.dp)
         Column(Modifier.fillMaxSize()) {
             // top row: back to the pages (left), Done (right)
             Row(
@@ -132,32 +132,38 @@ fun ExportScreen(vm: AppViewModel) {
                     Text(stringResource(R.string.done), fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 }
             }
+            // v3.12: the details scroll (only if the phone is small); the actions are fixed at the bottom so
+            // Share / Save / Open / Lock are always on screen, above the navigation bar
             Column(
                 Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 SuccessBadge()
-                Spacer(Modifier.height(14.dp))
                 Text(
                     stringResource(R.string.pdf_created_ok),
-                    fontSize = 25.sp,
+                    fontSize = 22.sp,
                     fontWeight = FontWeight.ExtraBold,
                     color = c.onBackground,
                     textAlign = TextAlign.Center
                 )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(2.dp))
                 Text(stringResource(R.string.export_ready), fontSize = 14.sp, color = c.onSurfaceVariant, textAlign = TextAlign.Center)
-                Spacer(Modifier.height(20.dp))
-
-                DocCard(doc, onRename = { renameOpen = true })
                 Spacer(Modifier.height(14.dp))
+                DocCard(doc, onRename = { renameOpen = true })
+                Spacer(Modifier.height(10.dp))
                 QualityCard(vm.exportQuality) { vm.changeQuality(it) }
-                Spacer(Modifier.height(18.dp))
-
-                // actions
+                Spacer(Modifier.height(10.dp))
+            }
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(c.background)
+                    .navigationBarsPadding()
+                    .padding(start = 18.dp, end = 18.dp, top = 6.dp, bottom = 12.dp)
+            ) {
                 Button(
                     onClick = { sharePdf(ctx, vm, doc.file) },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 58.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 54.dp),
                     shape = RoundedCornerShape(20.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = c.primary, contentColor = c.onPrimary)
                 ) {
@@ -165,26 +171,14 @@ fun ExportScreen(vm: AppViewModel) {
                     Spacer(Modifier.width(10.dp))
                     Text(stringResource(R.string.share), fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 }
-                Spacer(Modifier.height(12.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Spacer(Modifier.height(10.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     ActionTile(Icons.Rounded.Save, stringResource(R.string.save_to_phone), Modifier.weight(1f)) {
                         saver.launch(vm.repo.sanitize(doc.name) + ".pdf")
                     }
                     ActionTile(Icons.Rounded.OpenInNew, stringResource(R.string.open), Modifier.weight(1f)) { vm.viewExported() }
+                    ActionTile(Icons.Rounded.Lock, stringResource(R.string.lock_title), Modifier.weight(1f)) { lockOpen = true }
                 }
-                Spacer(Modifier.height(12.dp))
-                OutlinedButton(
-                    onClick = { lockOpen = true },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
-                    shape = RoundedCornerShape(18.dp),
-                    border = BorderStroke(1.5.dp, c.primary.copy(alpha = 0.7f))
-                ) {
-                    Icon(Icons.Rounded.Lock, null, tint = c.onSurface, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(10.dp))
-                    Text(stringResource(R.string.lock_title), color = c.onSurface, fontWeight = FontWeight.SemiBold)
-                }
-                Spacer(Modifier.height(20.dp))
-                Spacer(Modifier.navigationBarsPadding())
             }
         }
     }
@@ -199,7 +193,7 @@ fun ExportScreen(vm: AppViewModel) {
 @Composable
 private fun SuccessBadge() {
     val c = MaterialTheme.colorScheme
-    Box(Modifier.size(150.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(112.dp), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
             drawCircle(
                 Brush.radialGradient(listOf(c.primary.copy(alpha = 0.45f), Color.Transparent), center, size.minDimension / 2f),
@@ -209,15 +203,15 @@ private fun SuccessBadge() {
         }
         Box(
             Modifier
-                .size(96.dp)
+                .size(72.dp)
                 .clip(CircleShape)
                 .background(Brush.linearGradient(listOf(c.primary, c.primaryContainer), Offset(0f, 0f), Offset(250f, 250f))),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(56.dp))
+            Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(42.dp))
         }
-        Icon(Icons.Rounded.AutoAwesome, null, tint = c.primary.copy(alpha = 0.8f), modifier = Modifier.align(Alignment.TopEnd).padding(top = 8.dp, end = 6.dp).size(20.dp))
-        Icon(Icons.Rounded.AutoAwesome, null, tint = c.primary.copy(alpha = 0.6f), modifier = Modifier.align(Alignment.BottomStart).padding(bottom = 18.dp, start = 4.dp).size(14.dp))
+        Icon(Icons.Rounded.AutoAwesome, null, tint = c.primary.copy(alpha = 0.8f), modifier = Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 4.dp).size(17.dp))
+        Icon(Icons.Rounded.AutoAwesome, null, tint = c.primary.copy(alpha = 0.6f), modifier = Modifier.align(Alignment.BottomStart).padding(bottom = 14.dp, start = 4.dp).size(12.dp))
     }
 }
 
@@ -227,8 +221,8 @@ private fun DocCard(doc: DocItem, onRename: () -> Unit) {
     val c = MaterialTheme.colorScheme
     val thumb by rememberFileImage(doc.thumb, 400)
     AppCard(Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(96.dp, 124.dp).clip(RoundedCornerShape(12.dp)).background(Color.White)) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(74.dp, 96.dp).clip(RoundedCornerShape(12.dp)).background(Color.White)) {
                 val t = thumb
                 if (t != null) Image(t, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 else Icon(Icons.Rounded.PictureAsPdf, null, tint = c.onSurfaceVariant, modifier = Modifier.align(Alignment.Center))
@@ -245,7 +239,7 @@ private fun DocCard(doc: DocItem, onRename: () -> Unit) {
                 )
             }
             Spacer(Modifier.width(14.dp))
-            Box(Modifier.width(1.dp).height(100.dp).background(c.outlineVariant))
+            Box(Modifier.width(1.dp).height(80.dp).background(c.outlineVariant))
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -262,7 +256,7 @@ private fun DocCard(doc: DocItem, onRename: () -> Unit) {
                         Icon(Icons.Rounded.Edit, stringResource(R.string.rename), tint = c.primary, modifier = Modifier.size(20.dp))
                     }
                 }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(2.dp))
                 val pages = if (doc.pages == 1) stringResource(R.string.page_one) else stringResource(R.string.pages_many, doc.pages)
                 InfoLine(Icons.Rounded.Layers, pages)
                 InfoLine(Icons.Rounded.Storage, Formatter.formatShortFileSize(ctx, doc.size))
@@ -276,7 +270,7 @@ private fun DocCard(doc: DocItem, onRename: () -> Unit) {
 @Composable
 private fun InfoLine(icon: ImageVector, text: String) {
     val c = MaterialTheme.colorScheme
-    Row(Modifier.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, tint = c.onSurfaceVariant, modifier = Modifier.size(17.dp))
         Spacer(Modifier.width(8.dp))
         Text(text, color = c.onSurfaceVariant, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -287,16 +281,16 @@ private fun InfoLine(icon: ImageVector, text: String) {
 private fun QualityCard(selected: Int, onPick: (Int) -> Unit) {
     val c = MaterialTheme.colorScheme
     AppCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Rounded.Tune, null, tint = c.onSurface, modifier = Modifier.size(24.dp))
                 Spacer(Modifier.width(10.dp))
                 Column {
                     Text(stringResource(R.string.export_quality), fontWeight = FontWeight.Bold, fontSize = 16.sp, color = c.onSurface)
-                    Text(stringResource(R.string.export_quality_d), fontSize = 13.sp, color = c.onSurfaceVariant)
+                    Text(stringResource(R.string.export_quality_d), fontSize = 12.sp, color = c.onSurfaceVariant)
                 }
             }
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 QualityTile(Icons.Rounded.Diamond, stringResource(R.string.quality_high), stringResource(R.string.q_high_sub), selected == 0, Modifier.weight(1f)) { onPick(0) }
                 QualityTile(Icons.Rounded.Balance, stringResource(R.string.quality_bal), stringResource(R.string.q_bal_sub), selected == 1, Modifier.weight(1f)) { onPick(1) }
@@ -318,7 +312,7 @@ private fun QualityTile(icon: ImageVector, title: String, sub: String, on: Boole
                 .background(if (on) c.primary.copy(alpha = 0.18f) else c.surfaceContainerHigh)
                 .border(if (on) 2.dp else 1.dp, if (on) c.primary else c.outlineVariant, shape)
                 .clickable(onClick = onClick)
-                .padding(vertical = 12.dp, horizontal = 6.dp),
+                .padding(vertical = 10.dp, horizontal = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Icon(icon, null, tint = if (on) c.primary else c.onSurfaceVariant, modifier = Modifier.size(24.dp))
@@ -337,17 +331,32 @@ private fun QualityTile(icon: ImageVector, title: String, sub: String, on: Boole
 
 @Composable
 private fun ActionTile(icon: ImageVector, label: String, modifier: Modifier, onClick: () -> Unit) {
+    // v3.12: icon above a two-line label, so three fit side by side (Save, Open, Lock)
     val c = MaterialTheme.colorScheme
-    OutlinedButton(
-        onClick = onClick,
-        modifier = modifier.heightIn(min = 54.dp),
-        shape = RoundedCornerShape(18.dp),
-        border = BorderStroke(1.dp, c.outlineVariant),
-        colors = ButtonDefaults.outlinedButtonColors(containerColor = c.surfaceContainer)
+    val shape = RoundedCornerShape(18.dp)
+    Column(
+        modifier
+            .heightIn(min = 68.dp)
+            .clip(shape)
+            .background(c.surfaceContainer)
+            .border(1.dp, c.outlineVariant, shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
-        Icon(icon, null, tint = c.onSurface, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(label, color = c.onSurface, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Icon(icon, null, tint = c.onSurface, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.height(4.dp))
+        Text(
+            label,
+            color = c.onSurface,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 12.sp,
+            lineHeight = 14.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
+        )
     }
 }
 

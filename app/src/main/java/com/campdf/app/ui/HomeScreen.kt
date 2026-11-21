@@ -64,6 +64,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -114,9 +118,17 @@ fun HomeScreen(vm: AppViewModel, full: Boolean = false) {
     // v3.12: home shows the newest few; "See all" opens the full list. A search always looks through everything.
     val recent = remember(vm.docs) { vm.docs.sortedByDescending { it.modified }.take(RECENT_COUNT) }
     val list = when {
+        !full -> recent
         query.isNotBlank() -> all.filter { it.name.contains(query, ignoreCase = true) }
-        full -> all
-        else -> recent
+        else -> all
+    }
+    // v3.12: the search lives on the All documents screen; the home search button opens it with the keyboard up
+    val searchFocus = remember { FocusRequester() }
+    LaunchedEffect(full) {
+        if (full && vm.focusDocSearch) {
+            vm.focusDocSearch = false
+            runCatching { searchFocus.requestFocus() }
+        }
     }
     // forget selections of documents that no longer exist (deleted / renamed)
     LaunchedEffect(all) { val names = all.map { it.file.name }.toSet(); selected.retainAll { it in names } }
@@ -197,6 +209,13 @@ fun HomeScreen(vm: AppViewModel, full: Boolean = false) {
                 ) {
                     BrandMark(Modifier.weight(1f))
                     IconButton(
+                        onClick = { vm.focusDocSearch = true; vm.screen = Screen.Documents },
+                        modifier = Modifier.clip(CircleShape).background(c.surfaceContainerHigh.copy(alpha = 0.7f))
+                    ) {
+                        Icon(Icons.Rounded.Search, stringResource(R.string.search_hint), tint = c.onSurface)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    IconButton(
                         onClick = { vm.screen = Screen.Settings },
                         modifier = Modifier.clip(CircleShape).background(c.surfaceContainerHigh.copy(alpha = 0.7f))
                     ) {
@@ -205,19 +224,19 @@ fun HomeScreen(vm: AppViewModel, full: Boolean = false) {
                 }
                 Text(
                     stringResource(R.string.all_documents),
-                    fontSize = 28.sp,
+                    fontSize = 24.sp,
                     fontWeight = FontWeight.ExtraBold,
                     color = c.onBackground,
-                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp)
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 10.dp)
                 )
                 Text(
                     stringResource(R.string.home_subtitle),
                     fontSize = 14.sp,
                     color = c.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 2.dp)
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 10.dp)
                 )
             }
-            OutlinedTextField(
+            if (full) OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
                 placeholder = { Text(stringResource(R.string.search_hint)) },
@@ -229,13 +248,13 @@ fun HomeScreen(vm: AppViewModel, full: Boolean = false) {
                     unfocusedContainerColor = c.surfaceContainer,
                     unfocusedBorderColor = c.outlineVariant
                 ),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).focusRequester(searchFocus)
             )
             // v3.9: the tools scroll away with the list (before they stayed fixed and left little room for the
             // documents on small screens)
             LazyColumn(
                 contentPadding = PaddingValues(top = 4.dp, bottom = 120.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
                 if (!selecting && !full) {
@@ -244,7 +263,7 @@ fun HomeScreen(vm: AppViewModel, full: Boolean = false) {
                 if (!full && all.isNotEmpty()) {
                     item(key = "recent") {
                         SectionHeader(
-                            stringResource(if (query.isBlank()) R.string.recent_documents else R.string.search_results),
+                            stringResource(R.string.recent_documents),
                             Icons.Rounded.History,
                             action = stringResource(R.string.see_all),
                             onAction = { query = ""; selected.clear(); vm.screen = Screen.Documents }
@@ -296,23 +315,25 @@ fun HomeScreen(vm: AppViewModel, full: Boolean = false) {
             }
         }
 
+        // v3.12: the list fades out under the buttons instead of showing through between them
         if (!selecting) Row(
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
+                .background(Brush.verticalGradient(listOf(Color.Transparent, c.background, c.background), 0f, 90f))
                 .navigationBarsPadding()
-                .padding(16.dp),
+                .padding(start = 16.dp, end = 16.dp, top = 22.dp, bottom = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             PrimaryButton(
                 stringResource(R.string.scan),
-                Modifier.weight(1.2f).height(60.dp),
+                Modifier.weight(1.2f).height(54.dp),
                 icon = Icons.Rounded.CameraAlt,
                 onClick = { vm.startScan() }
             )
             SecondaryButton(
                 stringResource(R.string.import_short),
-                Modifier.weight(1f).height(60.dp),
+                Modifier.weight(1f).height(54.dp),
                 icon = Icons.Rounded.PhotoLibrary,
                 onClick = { picker.launch("image/*") }
             )
@@ -397,23 +418,23 @@ private fun DocRow(
     val thumb by rememberFileImage(doc.thumb, 240)
     var menu by remember { mutableStateOf(false) }
     val date = remember(doc.modified) {
+        // v3.12: short date ("Nov 21") so the line fits; the year only for older documents
         val d = Date(doc.modified)
-        DateFormat.getDateInstance(DateFormat.MEDIUM).format(d) + " • " + DateFormat.getTimeInstance(DateFormat.SHORT).format(d)
+        val cal = java.util.Calendar.getInstance()
+        val thisYear = cal.get(java.util.Calendar.YEAR)
+        cal.time = d
+        val skeleton = if (cal.get(java.util.Calendar.YEAR) == thisYear) "MMMd" else "MMMdyyyy"
+        val pattern = android.text.format.DateFormat.getBestDateTimePattern(java.util.Locale.getDefault(), skeleton)
+        java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault()).format(d) + " • " +
+            DateFormat.getTimeInstance(DateFormat.SHORT).format(d)
     }
-    val pagesText = when {
-        doc.pages <= 0 -> ""
-        doc.pages == 1 -> stringResource(R.string.page_one)
-        else -> stringResource(R.string.pages_many, doc.pages)
-    }
-    val meta = listOf(date, pagesText, Formatter.formatShortFileSize(ctx, doc.size))
-        .filter { it.isNotEmpty() }
-        .joinToString(" • ")
+    val meta = date + " • " + Formatter.formatShortFileSize(ctx, doc.size)
 
     AppCard(Modifier.fillMaxWidth(), onClick = onOpen, onLongClick = onToggle, selected = isSelected) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(start = 10.dp, top = 8.dp, bottom = 8.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier
-                    .size(56.dp, 74.dp)
+                    .size(46.dp, 60.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(c.surfaceContainerHigh),
                 contentAlignment = Alignment.Center
@@ -424,22 +445,42 @@ private fun DocRow(
                 } else {
                     Icon(Icons.Rounded.PictureAsPdf, null, tint = c.onSurfaceVariant)
                 }
+                if (doc.pages > 1) {
+                    Text(
+                        "${doc.pages}",
+                        color = Color.White,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .clip(RoundedCornerShape(topStart = 6.dp))
+                            .background(c.primary)
+                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                    )
+                }
             }
-            Spacer(Modifier.width(14.dp))
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
                     doc.name,
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 16.sp,
+                    fontSize = 15.sp,
                     color = c.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(4.dp))
-                Text(meta, color = c.onSurfaceVariant, fontSize = 12.sp, maxLines = 2)
+                Spacer(Modifier.height(3.dp))
+                // date • time • size on one line (the page count is the badge on the thumbnail)
+                Text(
+                    meta,
+                    color = c.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
             // v3.8: the checkbox is always there - tap it to select (no need to know about long-press)
-            IconButton(onClick = onToggle) {
+            IconButton(onClick = onToggle, modifier = Modifier.size(40.dp)) {
                 Icon(
                     if (isSelected) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank,
                     stringResource(R.string.select),
@@ -447,7 +488,7 @@ private fun DocRow(
                 )
             }
             if (!selecting) Box {
-                IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreVert, stringResource(R.string.more_options), tint = c.onSurfaceVariant) }
+                IconButton(onClick = { menu = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Rounded.MoreVert, stringResource(R.string.more_options), tint = c.onSurfaceVariant) }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.share)) },

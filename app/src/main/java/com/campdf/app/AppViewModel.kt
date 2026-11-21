@@ -216,6 +216,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** v3.11: "Open" on the PDF-created screen shows the PDF in CamPDF's own viewer; back returns to that screen. */
     private var viewerFromExport = false
     private var viewerReturn = Screen.Home
+    /** v3.12: the home search button opens All documents with the search field focused (keyboard up). */
+    var focusDocSearch = false
 
     fun viewExported() {
         val d = exported ?: return
