@@ -46,14 +46,20 @@ class PickSource(private val src: PageSource, private val order: List<Int>) : Pa
  */
 object PdfDoc {
 
-    private class Info(val img: PdfFile.Obj, val w: Int, val h: Int, val box: FloatArray)
+    private class Info(
+        val img: PdfFile.Obj, val w: Int, val h: Int, val box: FloatArray, val bitonal: Boolean,
+        val mask: PdfFile.Obj? = null, val mw: Int = 0, val mh: Int = 0
+    )
 
     private class CamPdfSource(private val pdf: PdfFile, private val infos: List<Info>) : PageSource {
         override val count: Int get() = infos.size
         override fun box(i: Int) = infos[i].box
         override fun page(i: Int): PdfPage {
             val inf = infos[i]
-            return PdfPage(pdf.stream(inf.img), inf.w, inf.h, box = inf.box)
+            return PdfPage(
+                pdf.stream(inf.img), inf.w, inf.h, box = inf.box, bitonal = inf.bitonal,
+                mask = inf.mask?.let { pdf.stream(it) }, maskW = inf.mw, maskH = inf.mh
+            )
         }
         override fun close() = pdf.close()
     }
@@ -77,13 +83,19 @@ object PdfDoc {
                 val mb = nums(page.dict, "MediaBox")!!
                 val imgNum = Regex("""/XObject\s*<<\s*/\w+\s+(\d+)\s+\d+\s+R""").find(page.dict)!!.groupValues[1].toInt()
                 val img = pdf.obj(imgNum)
-                require(img.dict.contains("/DCTDecode") && img.isStream) { "not a JPEG page" }
+                val bitonal = img.dict.contains("/FlateDecode") && Regex("""/BitsPerComponent\s+1\b""").containsMatchIn(img.dict) &&
+                    img.dict.contains("/DeviceGray")
+                require(img.isStream && (img.dict.contains("/DCTDecode") || bitonal)) { "not a CamPDF page image" }
                 val w = Regex("""/Width\s+(\d+)""").find(img.dict)!!.groupValues[1].toInt()
                 val h = Regex("""/Height\s+(\d+)""").find(img.dict)!!.groupValues[1].toInt()
                 val cont = pdf.obj(pdf.ref(page.dict, "Contents")!!)
                 val cs = String(pdf.stream(cont), Charsets.ISO_8859_1)
                 val cm = Regex("""([-\d.]+)\s+[-\d.]+\s+[-\d.]+\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+cm""").find(cs)!!.groupValues
-                Info(img, w, h, floatArrayOf(mb[2] - mb[0], mb[3] - mb[1], cm[3].toFloat(), cm[4].toFloat(), cm[1].toFloat(), cm[2].toFloat()))
+                // v3.10 MRC text layer (stencil mask drawn over the image)
+                val mk = Regex("""/Mk0\s+(\d+)\s+\d+\s+R""").find(page.dict)?.groupValues?.get(1)?.toInt()?.let { pdf.obj(it) }
+                val mw = mk?.let { Regex("""/Width\s+(\d+)""").find(it.dict)!!.groupValues[1].toInt() } ?: 0
+                val mh = mk?.let { Regex("""/Height\s+(\d+)""").find(it.dict)!!.groupValues[1].toInt() } ?: 0
+                Info(img, w, h, floatArrayOf(mb[2] - mb[0], mb[3] - mb[1], cm[3].toFloat(), cm[4].toFloat(), cm[1].toFloat(), cm[2].toFloat()), bitonal, mk, mw, mh)
             }
             CamPdfSource(pdf, infos) as PageSource
         }.getOrElse {

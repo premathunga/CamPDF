@@ -37,6 +37,7 @@ import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.RotateRight
+import androidx.compose.material.icons.rounded.VerticalSplit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -184,6 +185,8 @@ fun ReviewScreen(vm: AppViewModel) {
             ) { filterOpen = !filterOpen }
             ToolButton(Icons.Rounded.Delete, stringResource(R.string.delete), tint = c.error) { if (page != null) confirmDelete = sel }
             ToolButton(Icons.Rounded.Edit, stringResource(R.string.sign)) { vm.openSign() }
+            // v3.10 Book mode: a photographed two-page spread -> two pages
+            ToolButton(Icons.Rounded.VerticalSplit, stringResource(R.string.split)) { vm.splitSelected() }
             if (page != null && page.stamps.isNotEmpty()) {
                 ToolButton(Icons.AutoMirrored.Rounded.Undo, stringResource(R.string.remove_signature)) { vm.undoSignature() }
             }

@@ -1,7 +1,7 @@
 // v3.9 self-contained PC tests (run by GitHub Actions, see .github/workflows/build.yml):
 // PdfWriter / PdfFile / PdfDoc (lossless merge, reorder, extract, exact A4), PdfCrypt (AES-256 lock) and
 // LiveTracker (auto-capture timing). Test pictures are generated here - no private photos needed.
-//   kotlinc PdfTests.kt <app>/PdfWriter.kt <app>/PdfFile.kt <app>/PdfDoc.kt <app>/PdfCrypt.kt <app>/LiveTracker.kt \
+//   kotlinc PdfTests.kt <app>/PdfWriter.kt <app>/PdfFile.kt <app>/PdfDoc.kt <app>/PdfCrypt.kt <app>/Bitonal.kt <app>/Mrc.kt <app>/PdfA.kt <app>/LiveTracker.kt \
 //       -include-runtime -d t.jar && java -jar t.jar out/
 // Afterwards the workflow checks out/locked.pdf with qpdf and compares renders with poppler.
 import com.campdf.app.ConcatSource
@@ -45,18 +45,59 @@ fun main(a: Array<String>) {
 
     val sa = PdfDoc.open(a)!!; val sb = PdfDoc.open(b)!!
     check(sa.count == 2 && sb.count == 1, "open: page counts")
-    check(sa.page(0).jpeg.contentEquals(p1.jpeg) && sb.page(0).jpeg.contentEquals(p3.jpeg), "open: JPEG bytes unchanged")
+    check(sa.page(0).data.contentEquals(p1.data) && sb.page(0).data.contentEquals(p3.data), "open: JPEG bytes unchanged")
     check(!PdfDoc.isFullA4(sa.box(0)) && PdfDoc.isFullA4(sb.box(0)), "exact A4 sheet recognised (ID copy), margin page not")
     PdfDoc.write(File(out, "merged.pdf"), ConcatSource(listOf(PdfDoc.open(a)!!, PdfDoc.open(b)!!)))
     PdfDoc.write(File(out, "reordered.pdf"), PickSource(sa, listOf(1, 0)))
     PdfDoc.write(File(out, "extract.pdf"), PickSource(sa, listOf(1)))
     val m = PdfDoc.open(File(out, "merged.pdf"))!!
-    check(m.count == 3 && m.box(2)!!.contentEquals(sb.box(0)!!) && m.page(1).jpeg.contentEquals(p2.jpeg), "merge keeps pages and geometry")
+    check(m.count == 3 && m.box(2)!!.contentEquals(sb.box(0)!!) && m.page(1).data.contentEquals(p2.data), "merge keeps pages and geometry")
     m.close(); sa.close(); sb.close()
     check(PdfDoc.open(File(out, "nope.pdf").apply { writeText("%PDF-1.4 hello") }) == null, "other PDFs -> null")
 
     PdfCrypt.lock(File(out, "merged.pdf"), File(out, "locked.pdf"), "සිංහල pass 123")
     check(PdfDoc.open(File(out, "locked.pdf")) == null, "locked file is not opened without the password")
+
+    // v3.10 1-bit (black-and-white) pages
+    val bw = javax.imageio.ImageIO.read(java.io.ByteArrayInputStream(jpeg(1240, 1754, 4)))
+    val px = IntArray(1240 * 1754).also { bw.getRGB(0, 0, 1240, 1754, it, 0, 1240) }
+    val bit = com.campdf.app.Bitonal.encode(px, 1240, 1754)
+    val bp = PdfPage(bit, 1240, 1754, bitonal = true)
+    val c = File(out, "bw.pdf")
+    PdfWriter.write(c, 2) { listOf(bp, p1)[it] }
+    println("  1-bit page ${bit.size / 1024} KB vs JPEG ${p1.data.size / 1024} KB")
+    val sc = PdfDoc.open(c)!!
+    check(sc.page(0).bitonal && sc.page(0).data.contentEquals(bit) && !sc.page(1).bitonal, "1-bit page read back unchanged")
+    val (dec, dw, dh) = com.campdf.app.Bitonal.decode(bit, 1240, 1754)
+    var same = dw == 1240 && dh == 1754
+    for (i in px.indices step 97) {
+        val p = px[i]; val l = ((p shr 16) and 255) * 299 + ((p shr 8) and 255) * 587 + (p and 255) * 114
+        if ((l >= 128000) != ((dec[i] and 255) == 255)) { same = false; break }
+    }
+    check(same, "1-bit decode = threshold of the source")
+    File(out, "bw.png").writeBytes(com.campdf.app.Bitonal.toPng(bit, 1240, 1754))
+    check(javax.imageio.ImageIO.read(File(out, "bw.png")).let { it.width == 1240 && it.height == 1754 }, "1-bit PNG export readable")
+    PdfDoc.write(File(out, "bw_copy.pdf"), sc); sc.close()
+    PdfCrypt.lock(c, File(out, "bw_locked.pdf"), "pw1234")
+
+    // v3.10 MRC page (text layer + small background) survives merge, PDF/A parts present
+    val mpx = IntArray(1240 * 1754).also { javax.imageio.ImageIO.read(java.io.ByteArrayInputStream(jpeg(1240, 1754, 5))).getRGB(0, 0, 1240, 1754, it, 0, 1240) }
+    for (i in mpx.indices) { // black ink on white: the bars become grey levels
+        val p = mpx[i]; val l = (((p shr 16) and 255) * 299 + ((p shr 8) and 255) * 587 + (p and 255) * 114) / 1000
+        val v = if (l < 200) l / 3 else 255
+        mpx[i] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+    }
+    check(com.campdf.app.Mrc.worthIt(mpx), "MRC: a text page qualifies")
+    val (mk, _) = com.campdf.app.Mrc.split(mpx, 1240, 1754)
+    val mp = PdfPage(jpeg(620, 877, 5), 620, 877, mask = mk, maskW = 1240, maskH = 1754)
+    PdfWriter.write(File(out, "mrc.pdf"), 1) { mp }
+    PdfDoc.write(File(out, "mrc_merged.pdf"), ConcatSource(listOf(PdfDoc.open(File(out, "mrc.pdf"))!!, PdfDoc.open(a)!!)))
+    val mm = PdfDoc.open(File(out, "mrc_merged.pdf"))!!
+    check(mm.count == 3 && mm.page(0).mask!!.contentEquals(mk) && mm.page(0).maskW == 1240, "MRC text layer kept through merge")
+    mm.close()
+    val raw = File(out, "merged.pdf").readText(Charsets.ISO_8859_1)
+    check(raw.contains("/GTS_PDFA1") && raw.contains("<pdfaid:part>1</pdfaid:part>") && raw.contains("/ID ["), "PDF/A-1b parts written")
+    check(com.campdf.app.PdfA.srgbIcc.size in 400..1000, "sRGB profile built")
 
     // LiveTracker (auto-capture)
     val tr = LiveTracker()

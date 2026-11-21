@@ -1,6 +1,5 @@
 package com.campdf.app.ui
 
-import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -46,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.campdf.app.AppViewModel
+import com.campdf.app.PageImages
 import com.campdf.app.PageToolMode
 import com.campdf.app.PageSource
 import com.campdf.app.R
@@ -112,12 +112,7 @@ private fun PageCell(src: PageSource, index: Int, pos: Int, extract: Boolean, on
     val img by produceState<ImageBitmap?>(null, src, index) {
         value = withContext(Dispatchers.IO) {
             runCatching {
-                val p = src.page(index)
-                val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeByteArray(p.jpeg, 0, p.jpeg.size, o)
-                var s = 1
-                while (maxOf(o.outWidth, o.outHeight) / (s * 2) >= 300) s *= 2
-                BitmapFactory.decodeByteArray(p.jpeg, 0, p.jpeg.size, BitmapFactory.Options().apply { inSampleSize = s })?.asImageBitmap()
+                PageImages.decode(src.page(index), 300)?.asImageBitmap()
             }.getOrNull()
         }
     }

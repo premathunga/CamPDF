@@ -204,4 +204,7 @@
     <string name="select">தேர்ந்தெடு</string>
     <string name="show_password">கடவுச்சொல்லைக் காட்டு</string>
     <string name="take_photo">புகைப்படம் எடு</string>
+    <string name="page_sideways">இந்தப் பக்கம் பக்கவாட்டில் உள்ளது போல் தெரிகிறது – Rotate ஐத் தட்டவும்.</string>
+    <string name="split">புத்தகம்</string>
+    <string name="split_done">புத்தகத்தின் நடுவில் இரண்டு பக்கங்களாகப் பிரிக்கப்பட்டது</string>
 </resources>

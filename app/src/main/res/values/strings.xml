@@ -205,4 +205,7 @@
     <string name="select">Select</string>
     <string name="show_password">Show password</string>
     <string name="take_photo">Take photo</string>
+    <string name="page_sideways">This page seems to lie sideways – tap Rotate.</string>
+    <string name="split">Book</string>
+    <string name="split_done">Split into two pages at the book\'s spine</string>
 </resources>

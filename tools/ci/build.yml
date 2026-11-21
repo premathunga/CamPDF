@@ -113,9 +113,11 @@ jobs:
           set -e
           A=app/src/main/java/com/campdf/app
           kotlinc/bin/kotlinc tools/jvmtest/PdfTests.kt $A/PdfWriter.kt $A/PdfFile.kt $A/PdfDoc.kt $A/PdfCrypt.kt \
-              $A/LiveTracker.kt -include-runtime -d pdftests.jar
+              $A/Bitonal.kt $A/Mrc.kt $A/PdfA.kt $A/LiveTracker.kt -include-runtime -d pdftests.jar
           java -jar pdftests.jar out
           qpdf --check out/merged.pdf
+          qpdf --check out/bw.pdf
+          qpdf --check out/mrc_merged.pdf
           qpdf --password='සිංහල pass 123' --check out/locked.pdf
           if qpdf --password=wrong --check out/locked.pdf >/dev/null 2>&1; then echo "wrong password accepted"; exit 1; fi
           pdftoppm -r 20 -png out/merged.pdf m

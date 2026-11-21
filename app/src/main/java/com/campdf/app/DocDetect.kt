@@ -476,17 +476,26 @@ object DocDetect {
                 val by = y0 + dy * t
                 var bestO = 0
                 var bestV = 0f
-                for (o in -range..range) {
+                fun stepAt(o: Int): Float {
                     var v = 0f
                     for (k in 0 until 3) {
                         val a = at(k, bx + nx * (o + 2), by + ny * (o + 2)) - at(k, bx + nx * (o - 2), by + ny * (o - 2))
                         v += a * a
                     }
+                    return v
+                }
+                for (o in -range..range) {
+                    val v = stepAt(o)
                     if (v > bestV) { bestV = v; bestO = o }
                 }
                 if (bestV < 100f) continue // < ~10 levels: no edge here
-                ptsX.add(bx + nx * bestO)
-                ptsY.add(by + ny * bestO)
+                // v3.10: sub-pixel edge position - a parabola through the step strength at bestO-1, bestO, bestO+1
+                val vm = stepAt(bestO - 1)
+                val vp = stepAt(bestO + 1)
+                val den = vm - 2f * bestV + vp
+                val frac = if (den < -1e-3f) (0.5f * (vm - vp) / den).coerceIn(-0.5f, 0.5f) else 0f
+                ptsX.add(bx + nx * (bestO + frac))
+                ptsY.add(by + ny * (bestO + frac))
                 wts.add(sqrt(bestV))
             }
             if (ptsX.size < 12) {

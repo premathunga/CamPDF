@@ -353,3 +353,30 @@ Quality
   a lint report artifact and the APK size in the run summary (`tools/jvmtest/PdfTests.kt`).
 - Screen-reader labels for all icon-only buttons and the shutter.
 - Removed unused strings and the Material Components library (theme now `Theme.AppCompat.DayNight.NoActionBar`).
+
+## v3.10.0 - engine upgrade
+Measured on the 63 real document photos and 35 background photos used throughout (tools/jvmtest).
+- **Black-and-white pages are stored 1 bit per pixel** (`Bitonal.kt`, PDF FlateDecode with the platform's zlib):
+  about **12x smaller** than JPEG (e.g. 281 KB -> 23 KB per page) and sharper letters. Low-resolution pages are
+  enlarged with smoothing first, so letter edges stay smooth. "PDF to images" gives lossless 1-bit PNGs for them.
+- **Compact quality = MRC** (`Mrc.kt`): documents (Magic) are stored as a sharp 1-bit black text layer over a
+  half-size JPEG background (paper, stamps, seals, coloured ink stay in colour) - about **2.4x smaller** than one
+  JPEG, letters crisper. Merge / extract / reorder / lock keep both layers.
+- **Auto filter**: each new page gets the filter that fits it - cards, coloured certificates and photos get Lighten
+  (colour-true), documents get Magic (`Imaging.autoFilter`; 17/17 correct on test pages incl. NIC cards).
+- **B&W filter**: Sauvola k 0.14 -> 0.22: thinner strokes, small loops of Sinhala handwriting stay open.
+- **Sideways pages** are pointed out after cropping (`Imaging.looksSideways`: 0 false alarms on 63 upright pages,
+  41/63 sideways pages recognised). Up/down cannot be decided reliably from the layout (forms, handwriting), so the
+  app does not rotate by itself.
+- **Sub-pixel page edges**: the full-resolution edge fit now places each edge point between pixels (parabolic peak).
+- **PageNet v6** (`assets/pagenet.bin`): v5 fine-tuned with "no page here" examples made from real background photos
+  (`tools/ml/neg_gen.py`, 2 epochs, lr 4e-4). Backgrounds called a page: v5 13 of 17 -> v6 **0 of 17**, including
+  backgrounds never seen in training; documents: validation IoU 0.9729 -> 0.9744, crop corners unchanged on 59/63
+  photos (4 moved slightly, none worse), live auto-capture 62/63 (median 1.0 s, slowest 1.5 s).
+- **Book mode** (Review -> Book): splits a photographed two-page spread at the spine (gutter shadow / gap between text
+  blocks, within 1.5 % on test spreads) and **straightens curved text lines** of each half (`Imaging.dewarpLines`:
+  bends of 8 - 14 px reduced to 0 - 3 px on test pages; flat pages are left alone).
+- **PDF/A-1b structure** (`PdfA.kt`): XMP metadata, an sRGB ICC output intent (built in code, 508 bytes, checked with
+  LittleCMS), file ID, matching dates. No validator is available offline here - check a file with the free veraPDF
+  (https://verapdf.org) before relying on it for archiving.
+- Writer: object numbers assigned while writing (pages with an MRC layer have 4 objects); catalog written last.

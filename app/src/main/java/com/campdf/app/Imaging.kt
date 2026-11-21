@@ -490,6 +490,273 @@ object Imaging {
 
     // ---------- filters ----------
 
+    /**
+     * v3.10 Auto filter: which filter fits this (cropped) page.
+     * Pages with large coloured areas - ID cards, bank books, coloured certificates, photos - get LIGHTEN (plain,
+     * colour-true): Magic re-balances the light and turned a laminated NIC's security print strong orange.
+     * Documents (white paper, dark / coloured ink, stamps, shadows) get MAGIC, which keeps coloured ink and seals.
+     * Measure: share of clearly coloured pixels after white balance (paper = 90th percentile per channel).
+     * Real pages: documents 0 - 9 %, NIC cards 37 - 48 %; the line is drawn at 20 %.
+     */
+    /**
+     * v3.10 Book pages bend near the spine, so their text lines curve ("smile"). This straightens them:
+     *  1. the page is cut into 16 vertical strips; for each strip the vertical shift of its text-row profile
+     *     against the middle strip is measured (best correlation), separately for the upper and the lower half;
+     *  2. a smooth curve (degree 3) is fitted through each half's shifts;
+     *  3. every column is moved up / down by its shift (blended between the two halves).
+     * A flat page (shifts below 0.4 % of the height, or an unsure fit) is returned unchanged.
+     */
+    fun dewarpLines(src: Bitmap): Bitmap {
+        val w = src.width
+        val h = src.height
+        if (w < 200 || h < 200) return src
+        val s = minOf(1f, 800f / maxOf(w, h))
+        val sw = maxOf(1, (w * s).toInt())
+        val sh = maxOf(1, (h * s).toInt())
+        val sm = if (s < 1f) Bitmap.createScaledBitmap(src, sw, sh, true) else src
+        val px = IntArray(sw * sh)
+        sm.getPixels(px, 0, sw, 0, 0, sw, sh)
+        if (sm !== src) sm.recycle()
+        val g = FloatArray(sw * sh) { val p = px[it]; ((p shr 16) and 255) * 0.299f + ((p shr 8) and 255) * 0.587f + (p and 255) * 0.114f }
+        val strips = 16
+        val maxShift = (sh * 0.012f).toInt().coerceAtLeast(2) // between NEIGHBOUR strips: less than half a line
+        // row ink profile (darkness) of strip k between rows y0..y1
+        fun profile(k: Int, y0: Int, y1: Int): FloatArray {
+            val x0 = k * sw / strips
+            val x1 = (k + 1) * sw / strips
+            return FloatArray(y1 - y0) { r ->
+                var t = 0f
+                val row = (y0 + r) * sw
+                for (x in x0 until x1) t += 255f - g[row + x]
+                t / (x1 - x0)
+            }
+        }
+        fun bestShift(a: FloatArray, b: FloatArray): Pair<Int, Float> {
+            val ma = a.average().toFloat()
+            val mb = b.average().toFloat()
+            var best = 0
+            var bestC = -1f
+            for (d in -maxShift..maxShift) {
+                var c = 0f; var na = 0f; var nb = 0f
+                for (i in a.indices) {
+                    val j = i + d
+                    if (j < 0 || j >= b.size) continue
+                    val x = a[i] - ma; val y = b[j] - mb
+                    c += x * y; na += x * x; nb += y * y
+                }
+                val cc = if (na > 0f && nb > 0f) c / kotlin.math.sqrt(na * nb) else -1f
+                if (cc > bestC) { bestC = cc; best = d }
+            }
+            return best to bestC
+        }
+        // Shifts are tracked from the middle strip outwards, each strip against its neighbour (text rows repeat,
+        // so comparing far-apart strips could lock onto the wrong line). Then a cubic is fitted (one round of
+        // outlier rejection). Null when the text rows cannot be followed or the curve does not fit.
+        fun fit(top: Boolean): FloatArray? {
+            val y0 = if (top) (sh * 0.05f).toInt() else sh / 2
+            val y1 = if (top) sh / 2 else (sh * 0.95f).toInt()
+            val prof = Array(strips) { profile(it, y0, y1) }
+            val c = strips / 2
+            val acc = HashMap<Int, Float>()
+            acc[c] = 0f
+            for (dir in listOf(1, -1)) {
+                var k = c + dir
+                while (k in 1 until strips - 1) {
+                    val (d, cc) = bestShift(prof[k - dir], prof[k])
+                    if (cc < 0.6f) break // lost the text rows (picture, margin): stop on this side
+                    acc[k] = acc[k - dir]!! + d
+                    k += dir
+                }
+            }
+            if (acc.size < 9) return null
+            var keys = acc.keys.toList()
+            var coef = FloatArray(4)
+            for (round in 0 until 2) {
+                val m = Array(4) { DoubleArray(5) }
+                for (k in keys) {
+                    val t = (k + 0.5) / strips * 2 - 1
+                    val v = DoubleArray(4) { e -> Math.pow(t, e.toDouble()) }
+                    for (r in 0 until 4) { for (cc in 0 until 4) m[r][cc] += v[r] * v[cc]; m[r][4] += v[r] * acc[k]!! }
+                }
+                for (col in 0 until 4) { // Gauss-Jordan
+                    val piv = (col until 4).maxByOrNull { abs(m[it][col]) }!!
+                    val tmp = m[col]; m[col] = m[piv]; m[piv] = tmp
+                    if (abs(m[col][col]) < 1e-9) return null
+                    for (r in 0 until 4) if (r != col) {
+                        val f = m[r][col] / m[col][col]
+                        for (cc in col until 5) m[r][cc] -= f * m[col][cc]
+                    }
+                }
+                coef = FloatArray(4) { (m[it][4] / m[it][it]).toFloat() }
+                fun res(k: Int): Float {
+                    val t = ((k + 0.5) / strips * 2 - 1).toFloat()
+                    return abs(coef[0] + coef[1] * t + coef[2] * t * t + coef[3] * t * t * t - acc[k]!!)
+                }
+                if (round == 0) {
+                    val kept = keys.filter { res(it) <= 3f }
+                    if (kept.size < 8) return null
+                    keys = kept
+                } else {
+                    if (keys.map { res(it) }.average() > 1.5) return null
+                }
+            }
+            return coef
+        }
+        val top = fit(true) ?: return src
+        val bot = fit(false) ?: return src
+        fun shiftAt(c: FloatArray, t: Float) = c[0] + c[1] * t + c[2] * t * t + c[3] * t * t * t
+        var maxAbs = 0f
+        for (k in 0..20) {
+            val t = k / 10f - 1f
+            maxAbs = max(maxAbs, max(abs(shiftAt(top, t) - top[0]), abs(shiftAt(bot, t) - bot[0])))
+        }
+        if (maxAbs < sh * 0.004f) return src // flat enough
+        // remap at full size: column x moves by its shift (scaled up), blended from the top curve to the bottom one
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val col = IntArray(h)
+        val res = IntArray(h)
+        val inv = 1f / s
+        for (x in 0 until w) {
+            val t = (x + 0.5f) / w * 2f - 1f
+            val dt = (shiftAt(top, t) - shiftAt(top, 0f)) * inv
+            val db = (shiftAt(bot, t) - shiftAt(bot, 0f)) * inv
+            src.getPixels(col, 0, 1, x, 0, 1, h)
+            for (y in 0 until h) {
+                val f = (y.toFloat() / h - 0.25f) / 0.5f
+                val d = dt + (db - dt) * f.coerceIn(0f, 1f)
+                val sy = (y + d).roundToInt().coerceIn(0, h - 1)
+                res[y] = col[sy]
+            }
+            out.setPixels(res, 0, 1, x, 0, 1, h)
+        }
+        return out
+    }
+
+    /**
+     * v3.10 Book mode: where to split a photographed two-page spread (fraction of the width, 0.3 - 0.7).
+     * The spine shows as the darkest column band (gutter shadow) and / or the widest band without writing between
+     * the two text blocks; both are scored on a small copy and the best column near the middle wins.
+     * Without a clear spine the middle (0.5) is used.
+     */
+    fun findSpine(page: Bitmap): Float {
+        val s = minOf(1f, 500f / page.width)
+        val sm = if (s < 1f) Bitmap.createScaledBitmap(page, maxOf(1, (page.width * s).toInt()), maxOf(1, (page.height * s).toInt()), true) else page
+        val w = sm.width
+        val h = sm.height
+        val px = IntArray(w * h)
+        sm.getPixels(px, 0, w, 0, 0, w, h)
+        if (sm !== page) sm.recycle()
+        if (w < 50 || h < 50) return 0.5f
+        val lum = DoubleArray(w)
+        val ink = DoubleArray(w)
+        val y0 = (h * 0.1).toInt()
+        val y1 = (h * 0.9).toInt()
+        for (x in 0 until w) {
+            var sl = 0.0
+            var si = 0.0
+            var prev = -1
+            for (y in y0 until y1) {
+                val p = px[y * w + x]
+                val l = ((p shr 16) and 255) * 0.299 + ((p shr 8) and 255) * 0.587 + (p and 255) * 0.114
+                sl += l
+                if (prev >= 0 && abs(l - prev) > 40) si++ // edges = writing
+                prev = l.toInt()
+            }
+            lum[x] = sl / (y1 - y0)
+            ink[x] = si / (y1 - y0)
+        }
+        fun smooth(a: DoubleArray, r: Int) = DoubleArray(a.size) { i ->
+            var t = 0.0; var n = 0
+            for (k in maxOf(0, i - r)..minOf(a.size - 1, i + r)) { t += a[k]; n++ }
+            t / n
+        }
+        val sl = smooth(lum, 3)
+        val si = smooth(ink, 6)
+        val lo = (w * 0.3).toInt()
+        val hi = (w * 0.7).toInt()
+        val lumMed = sl.slice(lo until hi).sorted()[(hi - lo) / 2]
+        val inkMax = (lo until hi).maxOf { si[it] }.coerceAtLeast(1e-6)
+        var best = -1
+        var bestScore = 0.0
+        for (x in lo until hi) {
+            val shadow = ((lumMed - sl[x]) / 40.0).coerceIn(0.0, 1.0)          // darker than usual
+            val gap = 1.0 - si[x] / inkMax                                         // no writing here
+            val centre = 1.0 - abs(x - w / 2.0) / (w * 0.2) * 0.3                  // slight preference for the middle
+            val score = (0.6 * shadow + 0.4 * gap) * centre
+            if (score > bestScore) { bestScore = score; best = x }
+        }
+        return if (best < 0 || bestScore < 0.35) 0.5f else (best + 0.5f) / w
+    }
+
+    /**
+     * v3.10: true when the text lines of a (cropped) page run up-down - the page is lying sideways and needs a
+     * quarter turn. Tuned to never cry wolf: on 63 real pages none upright was flagged, 41 of the same pages turned
+     * sideways were recognised (pages with little or scattered writing are left alone). Which way to turn (left or right) cannot be told reliably from the layout alone (forms and
+     * handwriting defeat every cue we measured), so the app only tells the user; it does not rotate by itself.
+     */
+    fun looksSideways(page: Bitmap): Boolean {
+        val s = minOf(1f, 600f / maxOf(page.width, page.height))
+        val sm = if (s < 1f) Bitmap.createScaledBitmap(page, maxOf(1, (page.width * s).toInt()), maxOf(1, (page.height * s).toInt()), true) else page
+        val w = sm.width
+        val h = sm.height
+        val px = IntArray(w * h)
+        sm.getPixels(px, 0, w, 0, 0, w, h)
+        if (sm !== page) sm.recycle()
+        if (w < 60 || h < 60) return false
+        val g = FloatArray(w * h) { val p = px[it]; ((p shr 16) and 255) * 0.299f + ((p shr 8) and 255) * 0.587f + (p and 255) * 0.114f }
+        // ink = darker than the local mean (15 px box, integral image), inside a 4 % margin
+        val ii = DoubleArray((w + 1) * (h + 1))
+        for (y in 0 until h) { var r = 0.0; for (x in 0 until w) { r += g[y * w + x]; ii[(y + 1) * (w + 1) + x + 1] = ii[y * (w + 1) + x + 1] + r } }
+        val rad = 15
+        val mx = (w * 0.04f).toInt()
+        val my = (h * 0.04f).toInt()
+        val rows = DoubleArray(h)
+        val cols = DoubleArray(w)
+        var total = 0.0
+        for (y in my until h - my) for (x in mx until w - mx) {
+            val x0 = maxOf(0, x - rad); val y0 = maxOf(0, y - rad); val x1 = minOf(w, x + rad + 1); val y1 = minOf(h, y + rad + 1)
+            val mean = (ii[y1 * (w + 1) + x1] - ii[y0 * (w + 1) + x1] - ii[y1 * (w + 1) + x0] + ii[y0 * (w + 1) + x0]) / ((x1 - x0) * (y1 - y0))
+            if (g[y * w + x] < mean - 25) { rows[y]++; cols[x]++; total++ }
+        }
+        if (total < w * h * 0.01) return false // hardly any writing: nothing to judge
+        fun relVar(a: DoubleArray, from: Int, to: Int): Double {
+            var m = 0.0; for (i in from until to) m += a[i]; m /= (to - from)
+            if (m <= 0.0) return 0.0
+            var v = 0.0; for (i in from until to) v += (a[i] - m) * (a[i] - m); v /= (to - from)
+            return v / (m * m)
+        }
+        val vr = relVar(rows, my, h - my)
+        val vc = relVar(cols, mx, w - mx)
+        return vc > vr * 2.5 && vc > 0.8
+    }
+
+    fun autoFilter(page: Bitmap): FilterMode {
+        val s = minOf(1f, 240f / maxOf(page.width, page.height))
+        val sm = if (s < 1f) Bitmap.createScaledBitmap(page, maxOf(1, (page.width * s).toInt()), maxOf(1, (page.height * s).toInt()), true) else page
+        val n = sm.width * sm.height
+        val px = IntArray(n)
+        sm.getPixels(px, 0, sm.width, 0, 0, sm.width, sm.height)
+        if (sm !== page) sm.recycle()
+        fun p90(shift: Int): Float {
+            val h = IntArray(256)
+            for (p in px) h[(p shr shift) and 255]++
+            var acc = 0
+            for (v in 255 downTo 0) { acc += h[v]; if (acc >= n / 10) return maxOf(1, v).toFloat() }
+            return 255f
+        }
+        val wr = 255f / p90(16)
+        val wg = 255f / p90(8)
+        val wb = 255f / p90(0)
+        var colored = 0
+        for (p in px) {
+            val r = minOf(255f, ((p shr 16) and 255) * wr)
+            val g = minOf(255f, ((p shr 8) and 255) * wg)
+            val b = minOf(255f, (p and 255) * wb)
+            if (maxOf(r, maxOf(g, b)) - minOf(r, minOf(g, b)) > 45f) colored++
+        }
+        return if (colored > n * 0.20f) FilterMode.LIGHTEN else FilterMode.MAGIC
+    }
+
     fun applyFilter(src: Bitmap, mode: FilterMode): Bitmap = when (mode) {
         FilterMode.ORIGINAL -> src
         FilterMode.LIGHTEN -> lighten(src)
@@ -1095,7 +1362,8 @@ object Imaging {
 
     // ---------- B&W (v2.8.0) ----------
 
-    @Volatile var bwK = 0.14f
+    // v3.10: 0.14 -> 0.22 - thinner strokes, small loops of Sinhala handwriting stay open (no faint strokes lost)
+    @Volatile var bwK = 0.22f
     @Volatile var bwWin = 22f   // window = short side / bwWin
 
     /**

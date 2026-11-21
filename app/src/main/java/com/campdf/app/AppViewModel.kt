@@ -156,10 +156,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     PdfDoc.open(doc.file)?.use { own ->
                         for (i in 0 until own.count) {
                             val id = idCounter++
-                            val f = File(cache, "page_$id.jpg")
-                            f.writeBytes(own.page(i).jpeg)
-                            // v3.9: an ID copy sheet (full A4, true size) stays exactly A4 when saved again
-                            result.add(PageItem(id, f.absolutePath, f.absolutePath, null, 0, FilterMode.ORIGINAL,
+                            val pg = own.page(i)
+                            val (bytes, ext) = PageImages.file(pg)
+                            val f = File(cache, "page_$id.$ext")
+                            f.writeBytes(bytes)
+                            // v3.9: an ID copy sheet (full A4, true size) stays exactly A4 when saved again;
+                            // v3.10: a 1-bit page keeps the B&W filter, so it is saved as 1-bit again
+                            result.add(PageItem(id, f.absolutePath, f.absolutePath, null, 0,
+                                when { pg.bitonal -> FilterMode.BW; pg.mask != null -> FilterMode.MAGIC; else -> FilterMode.ORIGINAL },
                                 exactA4 = PdfDoc.isFullA4(own.box(i))))
                         }
                         return@runCatching result
@@ -318,6 +322,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun confirmCrop(c: FloatArray) {
         val raw = cropSourcePath ?: return
         val editIdx = cropEditIndex
+        var sideways = false
         viewModelScope.launch {
             busy = true
             val result = withContext(Dispatchers.Default) {
@@ -326,13 +331,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     val warped = try { Imaging.warp(src, c, 3508) } finally { src.recycle() }
                     val id = idCounter++
                     val f = File(cache, "page_$id.jpg")
-                    try { Imaging.saveJpeg(warped, f, 94) } finally { warped.recycle() }
-                    Pair(id, f.absolutePath)
+                    // v3.10: the filter is chosen for the page (cards / colour pages: Lighten, documents: Magic)
+                    val auto = try {
+                        Imaging.saveJpeg(warped, f, 94)
+                        // v3.10: a page lying sideways is pointed out (the user turns it with Rotate)
+                        if (runCatching { Imaging.looksSideways(warped) }.getOrDefault(false)) sideways = true
+                        runCatching { Imaging.autoFilter(warped) }.getOrDefault(FilterMode.MAGIC)
+                    } finally { warped.recycle() }
+                    Triple(id, f.absolutePath, auto)
                 }.getOrNull()
             }
             busy = false
             if (result == null) { message = err(); return@launch }
-            val (id, basePath) = result
+            val (id, basePath, auto) = result
+            if (sideways) message = str(R.string.page_sideways)
             val corners = c.toList()
             if (editIdx != null && editIdx in pages.indices) {
                 val old = pages[editIdx]
@@ -343,7 +355,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 // v3.8.1 ID copies: Lighten - a plain, colour-true brightening. Magic / Enhance re-balance the light and
                 // turned the security print of a laminated NIC into strong orange / yellow (phone test); Lighten kept
                 // the card as it looks.
-                pages.add(PageItem(id, raw, basePath, corners, filter = if (idMode) FilterMode.LIGHTEN else FilterMode.MAGIC))
+                pages.add(PageItem(id, raw, basePath, corners, filter = if (idMode) FilterMode.LIGHTEN else auto))
                 if (cropQueue.isNotEmpty()) cropQueue.removeAt(0)
                 if (cropQueue.isEmpty()) {
                     selected = pages.lastIndex
@@ -364,6 +376,44 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun rotateSelected() {
         val i = selected
         pages.getOrNull(i)?.let { pages[i] = it.copy(rotation = (it.rotation + 1) % 4) }
+    }
+
+    /**
+     * v3.10 Book mode: splits the selected page (a photographed two-page spread) at the book's spine into a left
+     * and a right page. The spine is found from the gutter shadow / the gap between the text blocks; text lines
+     * that curve towards the spine are straightened (Imaging.dewarpLines).
+     */
+    fun splitSelected() {
+        val i = selected
+        val page = pages.getOrNull(i) ?: return
+        viewModelScope.launch {
+            busy = true
+            val made = withContext(Dispatchers.Default) {
+                runCatching {
+                    var bm = Imaging.loadOriented(page.basePath, 3508) ?: error("load")
+                    bm = Imaging.rotate(bm, page.rotation)
+                    try {
+                        val cut = (Imaging.findSpine(bm) * bm.width).toInt().coerceIn(1, bm.width - 1)
+                        listOf(0 to cut, cut to bm.width).map { (x0, x1) ->
+                            val cut0 = android.graphics.Bitmap.createBitmap(bm, x0, 0, x1 - x0, bm.height)
+                            // the page curls towards the spine: its text lines are straightened (if they bend)
+                            val part = runCatching { Imaging.dewarpLines(cut0) }.getOrDefault(cut0)
+                            if (part !== cut0 && cut0 !== bm) cut0.recycle()
+                            val id = idCounter++
+                            val f = File(cache, "page_$id.jpg")
+                            try { Imaging.saveJpeg(part, f, 94) } finally { if (part !== bm) part.recycle() }
+                            PageItem(id, f.absolutePath, f.absolutePath, null, 0, page.filter)
+                        }
+                    } finally { bm.recycle() }
+                }.getOrNull()
+            }
+            busy = false
+            if (made == null) { message = err(); return@launch }
+            pages.removeAt(i)
+            pages.addAll(i, made)
+            selected = i
+            message = str(R.string.split_done)
+        }
     }
 
     fun setFilter(mode: FilterMode) {
@@ -475,9 +525,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         PdfWriter.write(target, list.size) { i ->
-            val bm = Imaging.pageBitmap(list[i], maxDim) ?: error("render")
+            val item = list[i]
+            val bm = Imaging.pageBitmap(item, maxDim) ?: error("render")
             try {
-                PdfPage(Imaging.toJpeg(bm, jpegQuality), bm.width, bm.height, exactA4 = list[i].exactA4)
+                // v3.10: black-and-white pages (no signature in colour on them) are stored with 1 bit per pixel
+                when {
+                    item.filter == FilterMode.BW && item.stamps.isEmpty() -> PageImages.bitonal(bm, item.exactA4)
+                    // v3.10 Compact: documents as MRC (sharp black text + small background), ~2.5x smaller
+                    quality == 2 && item.filter == FilterMode.MAGIC && item.stamps.isEmpty() && !item.exactA4 ->
+                        PageImages.mrc(bm, 60) ?: PdfPage(Imaging.toJpeg(bm, jpegQuality), bm.width, bm.height, exactA4 = item.exactA4)
+                    else -> PdfPage(Imaging.toJpeg(bm, jpegQuality), bm.width, bm.height, exactA4 = item.exactA4)
+                }
             } finally {
                 bm.recycle()
             }
@@ -584,15 +642,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** v3.9 pages of a saved document, read one at a time: CamPDF files losslessly, other PDFs rendered. */
     private fun openPages(file: File): PageSource = PdfDoc.open(file) ?: RenderSource(file)
 
-    private fun decodeJpeg(jpeg: ByteArray, maxDim: Int): Bitmap? {
-        val o = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, o)
-        var sample = 1
-        while (maxOf(o.outWidth, o.outHeight) / (sample * 2) >= maxDim) sample *= 2
-        val d = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
-        return android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, d)
-    }
-
     /**
      * Writes [src] as a document (a new file, or over [target]) with its sidecars; returns it. IO thread.
      * Pages are written one at a time (v3.9: long documents no longer need to fit into memory).
@@ -602,9 +651,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val file = target ?: repo.newFile(name)
         val parent = file.parentFile ?: repo.dir
         val temp = File(parent, ".${file.name}.${System.nanoTime()}.tmp")
-        var first: ByteArray? = null
+        var first: PdfPage? = null
         try {
-            PdfWriter.write(temp, src.count) { i -> src.page(i).also { if (i == 0) first = it.jpeg } }
+            PdfWriter.write(temp, src.count) { i -> src.page(i).also { if (i == 0) first = it } }
             try {
                 Files.move(temp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
             } catch (_: AtomicMoveNotSupportedException) {
@@ -613,7 +662,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         } finally {
             if (temp.exists()) temp.delete()
         }
-        val thumb = first?.let { decodeJpeg(it, 360) }
+        val thumb = first?.let { PageImages.decode(it, 360) }
         try { repo.writeMeta(file, src.count, thumb) } finally { thumb?.recycle() }
         return DocItem(
             file, file.nameWithoutExtension, src.count, file.length(), file.lastModified(),
@@ -658,7 +707,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         own.use { src ->
                             val f = repo.newFile(name)
                             tmp.copyTo(f)
-                            val thumb = decodeJpeg(src.page(0).jpeg, 360)
+                            val thumb = PageImages.decode(src.page(0), 360)
                             try { repo.writeMeta(f, src.count, thumb) } finally { thumb?.recycle() }
                         }
                     } else {
@@ -726,7 +775,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         override fun box(i: Int) = src.box(i)
         override fun page(i: Int): PdfPage {
             val p = src.page(i)
-            val bm = decodeJpeg(p.jpeg, maxDim * 2) ?: error("decode")
+            if (p.bitonal || p.mask != null) return p // already tiny (1-bit page / MRC layers)
+            val bm = PageImages.decode(p, maxDim * 2) ?: error("decode")
             val s = minOf(1f, maxDim.toFloat() / maxOf(bm.width, bm.height))
             val sc = if (s < 1f) Bitmap.createScaledBitmap(bm, (bm.width * s).toInt().coerceAtLeast(1), (bm.height * s).toInt().coerceAtLeast(1), true) else bm
             if (sc !== bm) bm.recycle()
@@ -734,7 +784,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val sh = sc.height
             val jpeg = try { Imaging.toJpeg(sc, q) } finally { sc.recycle() }
             // the page keeps its exact place and size on the sheet (box); an already small page stays as it was
-            return if (jpeg.size < p.jpeg.size) PdfPage(jpeg, sw, sh, exactA4 = p.exactA4, box = p.box) else p
+            return if (jpeg.size < p.data.size) PdfPage(jpeg, sw, sh, exactA4 = p.exactA4, box = p.box) else p
         }
         override fun close() = src.close()
     }
@@ -764,7 +814,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             dir.listFiles()?.forEach { it.delete() }
             val base = repo.sanitize(doc.name).replace(' ', '_')
             openPages(doc.file).use { src ->
-                List(src.count) { i -> File(dir, "${base}_${i + 1}.jpg").also { it.writeBytes(src.page(i).jpeg) } }
+                List(src.count) { i ->
+                    val (bytes, ext) = PageImages.file(src.page(i))
+                    File(dir, "${base}_${i + 1}.$ext").also { it.writeBytes(bytes) }
+                }
             }
         }, then)
     }

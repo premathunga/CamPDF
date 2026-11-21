@@ -18,7 +18,7 @@ fun main(a: Array<String>) {
     val ra = PdfDoc.readPages(File("a.pdf"))!!
     val rb = PdfDoc.readPages(File("b.pdf"))!!
     check(ra.size == 2 && rb.size == 1)
-    check(ra[0].jpeg.contentEquals(p1[0].jpeg) && rb[0].jpeg.contentEquals(p2[0].jpeg)) { "jpeg bytes kept" }
+    check(ra[0].data.contentEquals(p1[0].data) && rb[0].data.contentEquals(p2[0].data)) { "jpeg bytes kept" }
     val merged = ra + rb
     PdfWriter.write(File("merged.pdf"), merged.size) { merged[it] }
     val rev = listOf(ra[1], ra[0])
