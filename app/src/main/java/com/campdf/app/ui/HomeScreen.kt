@@ -24,6 +24,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Check
@@ -79,7 +81,11 @@ import java.text.DateFormat
 import java.util.Date
 
 @Composable
-fun HomeScreen(vm: AppViewModel) {
+/**
+ * v3.12 home (brand header, tools, the 5 newest documents + "See all") and, with [full], the All documents screen
+ * (every document, sort, back button). Search and multi-select work on both.
+ */
+fun HomeScreen(vm: AppViewModel, full: Boolean = false) {
     val ctx = LocalContext.current
     val c = MaterialTheme.colorScheme
     var query by remember { mutableStateOf("") }
@@ -105,17 +111,24 @@ fun HomeScreen(vm: AppViewModel) {
     var lockDoc by remember { mutableStateOf<DocItem?>(null) }
     // v3.6: all tools (and the dialogs they need)
     val tools = rememberTools(vm, all)
-    val list = if (query.isBlank()) all else all.filter { it.name.contains(query, ignoreCase = true) }
+    // v3.12: home shows the newest few; "See all" opens the full list. A search always looks through everything.
+    val recent = remember(vm.docs) { vm.docs.sortedByDescending { it.modified }.take(RECENT_COUNT) }
+    val list = when {
+        query.isNotBlank() -> all.filter { it.name.contains(query, ignoreCase = true) }
+        full -> all
+        else -> recent
+    }
     // forget selections of documents that no longer exist (deleted / renamed)
     LaunchedEffect(all) { val names = all.map { it.file.name }.toSet(); selected.retainAll { it in names } }
     val selectedDocs = all.filter { it.file.name in selected }
 
     Box(Modifier.fillMaxSize().background(c.background)) {
-        Column(Modifier.fillMaxSize().statusBarsPadding()) {
+        if (!full) WaveBackdrop(230.dp)
+        Column(Modifier.fillMaxSize()) {
             if (selecting) {
                 // selection bar: close, "N selected", select all, share, delete
                 Row(
-                    Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 12.dp, bottom = 4.dp),
+                    Modifier.fillMaxWidth().statusBarsPadding().padding(start = 4.dp, end = 4.dp, top = 12.dp, bottom = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = { selected.clear() }) { Icon(Icons.Rounded.Close, stringResource(R.string.cancel), tint = c.onSurface) }
@@ -147,18 +160,8 @@ fun HomeScreen(vm: AppViewModel) {
                         Icon(Icons.Rounded.Delete, stringResource(R.string.delete), tint = c.error)
                     }
                 }
-            } else {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    stringResource(R.string.all_documents),
-                    fontSize = 30.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = c.onBackground,
-                    modifier = Modifier.weight(1f)
-                )
+            } else if (full) {
+                ScreenTopBar(stringResource(R.string.all_documents), onBack = { vm.onBack() }) {
                 // v3.4.3: sort the list by date / name / size (remembered)
                 Box {
                     IconButton(onClick = { sortMenu = true }) {
@@ -185,10 +188,34 @@ fun HomeScreen(vm: AppViewModel) {
                         }
                     }
                 }
-                IconButton(onClick = { vm.screen = Screen.Settings }) {
-                    Icon(Icons.Rounded.Settings, stringResource(R.string.settings), tint = c.onSurface)
                 }
-            }
+            } else {
+                // v3.12 brand header: logo + CamPDF, settings; then the page title and a short subtitle
+                Row(
+                    Modifier.fillMaxWidth().statusBarsPadding().padding(start = 20.dp, end = 8.dp, top = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    BrandMark(Modifier.weight(1f))
+                    IconButton(
+                        onClick = { vm.screen = Screen.Settings },
+                        modifier = Modifier.clip(CircleShape).background(c.surfaceContainerHigh.copy(alpha = 0.7f))
+                    ) {
+                        Icon(Icons.Rounded.Settings, stringResource(R.string.settings), tint = c.onSurface)
+                    }
+                }
+                Text(
+                    stringResource(R.string.all_documents),
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = c.onBackground,
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp)
+                )
+                Text(
+                    stringResource(R.string.home_subtitle),
+                    fontSize = 14.sp,
+                    color = c.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 2.dp)
+                )
             }
             OutlinedTextField(
                 value = query,
@@ -196,7 +223,7 @@ fun HomeScreen(vm: AppViewModel) {
                 placeholder = { Text(stringResource(R.string.search_hint)) },
                 leadingIcon = { Icon(Icons.Rounded.Search, null) },
                 singleLine = true,
-                shape = RoundedCornerShape(20.dp),
+                shape = RoundedCornerShape(28.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedContainerColor = c.surfaceContainer,
                     unfocusedContainerColor = c.surfaceContainer,
@@ -211,8 +238,18 @@ fun HomeScreen(vm: AppViewModel) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                if (!selecting) {
+                if (!selecting && !full) {
                     item(key = "tools") { ToolsGrid(tools) { vm.screen = Screen.Tools } }
+                }
+                if (!full && all.isNotEmpty()) {
+                    item(key = "recent") {
+                        SectionHeader(
+                            stringResource(if (query.isBlank()) R.string.recent_documents else R.string.search_results),
+                            Icons.Rounded.History,
+                            action = stringResource(R.string.see_all),
+                            onAction = { query = ""; selected.clear(); vm.screen = Screen.Documents }
+                        )
+                    }
                 }
                 if (list.isEmpty()) {
                     item(key = "empty") {
@@ -274,7 +311,7 @@ fun HomeScreen(vm: AppViewModel) {
                 onClick = { vm.startScan() }
             )
             SecondaryButton(
-                stringResource(R.string.import_image),
+                stringResource(R.string.import_short),
                 Modifier.weight(1f).height(60.dp),
                 icon = Icons.Rounded.PhotoLibrary,
                 onClick = { picker.launch("image/*") }
@@ -360,7 +397,8 @@ private fun DocRow(
     val thumb by rememberFileImage(doc.thumb, 240)
     var menu by remember { mutableStateOf(false) }
     val date = remember(doc.modified) {
-        DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(doc.modified))
+        val d = Date(doc.modified)
+        DateFormat.getDateInstance(DateFormat.MEDIUM).format(d) + " • " + DateFormat.getTimeInstance(DateFormat.SHORT).format(d)
     }
     val pagesText = when {
         doc.pages <= 0 -> ""
@@ -446,3 +484,5 @@ private fun DocRow(
         }
     }
 }
+
+private const val RECENT_COUNT = 5

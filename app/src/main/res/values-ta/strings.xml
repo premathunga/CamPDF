@@ -10,6 +10,11 @@
     <string name="get_started">தொடங்குங்கள்</string>
     <string name="no_account">கணக்கு அல்லது பதிவு தேவையில்லை</string>
     <string name="all_documents">அனைத்து ஆவணங்கள்</string>
+    <string name="home_subtitle">ஸ்கேன் செய்த ஆவணங்களை நிர்வகிக்கவும்</string>
+    <string name="recent_documents">சமீபத்திய ஆவணங்கள்</string>
+    <string name="search_results">தேடல் முடிவுகள்</string>
+    <string name="see_all">அனைத்தும் காண்க</string>
+    <string name="import_short">இறக்குமதி</string>
     <string name="search_hint">ஆவணங்களைத் தேடுங்கள்…</string>
     <string name="scan">ஸ்கேன்</string>
     <string name="import_image">படத்தை இறக்குமதி</string>
@@ -70,8 +75,6 @@
     <string name="redraw">மீண்டும் வரை</string>
     <string name="remove_signature">கையொப்பத்தை நீக்கு</string>
     <string name="apply">பயன்படுத்து</string>
-    <string name="export_title">PDF ஏற்றுமதி</string>
-    <string name="pdf_created">PDF உருவாக்கப்பட்டது</string>
     <string name="file_name">கோப்பு பெயர்</string>
     <string name="save_to_phone">தொலைபேசியில் சேமி</string>
     <string name="saved_ok">சேமிக்கப்பட்டது</string>
@@ -184,7 +187,7 @@
     <string name="id_banner_passport">கடவுச்சீட்டு: புகைப்படப் பக்கம் A4 பக்கத்தில் உண்மையான அளவில் (125 × 88 mm). 100% / Actual size இல் அச்சிடவும்.</string>
     <string name="id_banner_cert">சான்றிதழ்: முழு ஆவணமும் A4 பக்கத்திற்கு பொருத்தப்படும்.</string>
     <string name="id_banner_wm">நீர்க்குறி: \"%1$s\"</string>
-    <string name="tools_all">அனைத்தும்</string>
+    <string name="tools_all">அனைத்து கருவிகள்</string>
     <string name="sec_scan">ஸ்கேன் &amp; இறக்குமதி</string>
     <string name="sec_convert">மாற்று</string>
     <string name="sec_edit">திருத்து</string>
@@ -207,4 +210,11 @@
     <string name="page_sideways">இந்தப் பக்கம் பக்கவாட்டில் உள்ளது போல் தெரிகிறது – Rotate ஐத் தட்டவும்.</string>
     <string name="split">புத்தகம்</string>
     <string name="split_done">புத்தகத்தின் நடுவில் இரண்டு பக்கங்களாகப் பிரிக்கப்பட்டது</string>
+    <string name="pdf_created_ok">PDF வெற்றிகரமாக உருவாக்கப்பட்டது!</string>
+    <string name="export_ready">உங்கள் ஆவணம் பயன்படுத்த தயார்</string>
+    <string name="export_quality">ஏற்றுமதி தரம்</string>
+    <string name="export_quality_d">உங்கள் தேவைக்கு ஏற்ற தரத்தைத் தேர்ந்தெடுக்கவும்</string>
+    <string name="q_high_sub">நுணுக்கங்களுக்கு</string>
+    <string name="q_bal_sub">பரிந்துரைக்கப்பட்டது</string>
+    <string name="q_compact_sub">மிகச் சிறிய அளவு</string>
 </resources>

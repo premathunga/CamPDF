@@ -11,6 +11,11 @@
     <string name="get_started">Get Started</string>
     <string name="no_account">No account or registration required</string>
     <string name="all_documents">All Documents</string>
+    <string name="home_subtitle">Manage your scanned documents</string>
+    <string name="recent_documents">Recent documents</string>
+    <string name="search_results">Search results</string>
+    <string name="see_all">See all</string>
+    <string name="import_short">Import</string>
     <string name="search_hint">Search documents…</string>
     <string name="scan">Scan</string>
     <string name="import_image">Import Image</string>
@@ -71,8 +76,6 @@
     <string name="redraw">Redraw</string>
     <string name="remove_signature">Remove sign</string>
     <string name="apply">Apply</string>
-    <string name="export_title">PDF Export</string>
-    <string name="pdf_created">PDF created</string>
     <string name="file_name">File name</string>
     <string name="save_to_phone">Save to phone</string>
     <string name="saved_ok">Saved</string>
@@ -185,7 +188,7 @@
     <string name="id_banner_passport">Passport: the photo page goes on an A4 page at real size (125 × 88 mm). Print at 100% / actual size.</string>
     <string name="id_banner_cert">Certificate: the whole document is fitted to an A4 page.</string>
     <string name="id_banner_wm">Watermark: \"%1$s\"</string>
-    <string name="tools_all">All</string>
+    <string name="tools_all">All Tools</string>
     <string name="sec_scan">Scan &amp; import</string>
     <string name="sec_convert">Convert</string>
     <string name="sec_edit">Edit</string>
@@ -208,4 +211,11 @@
     <string name="page_sideways">This page seems to lie sideways – tap Rotate.</string>
     <string name="split">Book</string>
     <string name="split_done">Split into two pages at the book\'s spine</string>
+    <string name="pdf_created_ok">PDF created successfully!</string>
+    <string name="export_ready">Your document is ready to use</string>
+    <string name="export_quality">Export quality</string>
+    <string name="export_quality_d">Choose the quality that fits your needs</string>
+    <string name="q_high_sub">Best for details</string>
+    <string name="q_bal_sub">Recommended</string>
+    <string name="q_compact_sub">Smallest size</string>
 </resources>

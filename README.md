@@ -380,3 +380,24 @@ Measured on the 63 real document photos and 35 background photos used throughout
   LittleCMS), file ID, matching dates. No validator is available offline here - check a file with the free veraPDF
   (https://verapdf.org) before relying on it for archiving.
 - Writer: object numbers assigned while writing (pages with an MRC layer have 4 objects); catalog written last.
+
+## v3.11.0 - new "PDF created" screen
+- Redesigned: glowing check over a soft wave, "PDF created successfully!", a document card (thumbnail with PDF
+  badge, file name with a rename pencil, pages / size / date), Export quality tiles (High - best for details,
+  Balanced - recommended, Compact - smallest size), a large Share button, Save to device + Open, and Lock with
+  password. Done (top right) finishes, the back arrow returns to the pages.
+- **Open now shows the PDF in CamPDF's own viewer** (back returns to this screen) instead of handing the file to
+  another app.
+
+## v3.12.0 - new look (redesign)
+
+- Home: CamPDF logo header with a soft blue wave, "All Documents" title and subtitle, rounded search,
+  tools in glowing colour circles (7 tools + **All Tools**), and **Recent documents** (the 5 newest) with
+  **See all →** that opens the full **All documents** screen (sort, search, multi-select, back button).
+  Searching on home looks through every document. Rows show date • time • pages • size.
+- Review: "Page X of Y" pill, blue corner brackets around the page, a check mark on the chosen thumbnail
+  (the red X still deletes it), a "+" tile to add pages, and square tool tiles that scroll sideways
+  (Add, Rotate, Crop, Filter, Delete in red, Sign, Book, Left, Right).
+- Every screen's top bar has the same wave; Tools are grouped in cards with icon headers.
+- The bottom "Import" button label no longer gets cut off. Works on both dark and light themes.
+- Back from a document opened in All documents returns to All documents.

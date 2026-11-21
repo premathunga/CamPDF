@@ -25,6 +25,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.Undo
@@ -74,14 +81,10 @@ fun ReviewScreen(vm: AppViewModel) {
     // v3.4.1: page index waiting for the "delete page?" confirmation (from the X on a thumbnail or the toolbar)
     var confirmDelete by remember { mutableStateOf(-1) }
 
-    Column(Modifier.fillMaxSize().background(c.background)) {
+    Box(Modifier.fillMaxSize().background(c.background)) {
+    Column(Modifier.fillMaxSize()) {
         ScreenTopBar(stringResource(R.string.review_title), onBack = { vm.onBack() }) {
-            Text(
-                stringResource(R.string.page_x_of_y, sel + 1, pages.size),
-                color = c.onSurfaceVariant,
-                fontSize = 13.sp,
-                modifier = Modifier.padding(end = 12.dp)
-            )
+            Pill(stringResource(R.string.page_x_of_y, sel + 1, pages.size))
         }
 
         val idKind = vm.idKind
@@ -112,9 +115,10 @@ fun ReviewScreen(vm: AppViewModel) {
                 .weight(1f)
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
-                .clip(RoundedCornerShape(24.dp))
-                .background(c.surfaceContainer)
-                .border(1.dp, c.outlineVariant, RoundedCornerShape(24.dp)),
+                .cornerBrackets(c.primary)
+                .padding(6.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(c.surfaceContainer),
             contentAlignment = Alignment.Center
         ) {
             val im = preview
@@ -137,11 +141,12 @@ fun ReviewScreen(vm: AppViewModel) {
                     Modifier
                         .size(64.dp, 86.dp)
                         .clip(RoundedCornerShape(12.dp))
-                        .border(1.dp, c.outline, RoundedCornerShape(12.dp))
+                        .background(c.primary.copy(alpha = 0.10f))
+                        .border(1.5.dp, c.primary.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
                         .clickable { vm.startScan() },
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Rounded.AddAPhoto, stringResource(R.string.add_page), tint = c.primary, modifier = Modifier.size(28.dp))
+                    Icon(Icons.Rounded.Add, stringResource(R.string.add_page), tint = c.primary, modifier = Modifier.size(28.dp))
                 }
             }
         }
@@ -207,6 +212,7 @@ fun ReviewScreen(vm: AppViewModel) {
             icon = Icons.Rounded.PictureAsPdf,
             enabled = pages.isNotEmpty()
         ) { vm.createPdf() }
+    }
     }
 
     if (confirmDelete >= 0) {
@@ -314,6 +320,20 @@ private fun Thumb(page: PageItem, index: Int, selected: Boolean, onDelete: () ->
                 .background(if (selected) c.primary else androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.6f))
                 .padding(horizontal = 7.dp, vertical = 2.dp)
         )
+        // v3.12: a check mark shows the chosen page (the new design)
+        if (selected) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(4.dp)
+                    .size(20.dp)
+                    .clip(CircleShape)
+                    .background(c.primary),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Rounded.Check, null, tint = c.onPrimary, modifier = Modifier.size(14.dp))
+            }
+        }
         // v3.4.1: small X in the top-right corner of the selected page = delete this page (asks first)
         if (selected) {
             Box(
@@ -330,4 +350,23 @@ private fun Thumb(page: PageItem, index: Int, selected: Boolean, onDelete: () ->
             }
         }
     }
+}
+
+/** v3.12: blue corner brackets around the page preview, like a scanner's frame. */
+private fun Modifier.cornerBrackets(color: Color): Modifier = drawWithContent {
+    drawContent()
+    val len = 26.dp.toPx()
+    val sw = 3.5.dp.toPx()
+    val h = sw / 2
+    val w = size.width
+    val ht = size.height
+    val st = Stroke(width = sw, cap = StrokeCap.Round)
+    fun corner(x: Float, y: Float, dx: Float, dy: Float) {
+        val p = Path().apply { moveTo(x, y + dy * len); lineTo(x, y); lineTo(x + dx * len, y) }
+        drawPath(p, color, style = st)
+    }
+    corner(h, h, 1f, 1f)
+    corner(w - h, h, -1f, 1f)
+    corner(h, ht - h, 1f, -1f)
+    corner(w - h, ht - h, -1f, -1f)
 }

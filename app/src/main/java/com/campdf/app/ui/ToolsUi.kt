@@ -40,6 +40,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.CameraAlt
+import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.material.icons.twotone.AddPhotoAlternate
 import androidx.compose.material.icons.twotone.Apps
 import androidx.compose.material.icons.twotone.Badge
@@ -128,15 +134,19 @@ fun ToolTile(t: ToolItem, modifier: Modifier = Modifier) {
             .padding(vertical = 6.dp, horizontal = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box(
-            Modifier
-                .size(54.dp)
-                .clip(CircleShape)
-                .background(t.color.copy(alpha = 0.16f))
-                .border(1.dp, t.color.copy(alpha = 0.22f), CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(t.icon, null, tint = t.color, modifier = Modifier.size(27.dp))
+        // v3.12: a glowing ring + gradient-filled circle in the tool's colour (the new design)
+        Box(Modifier.size(62.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.matchParentSize().clip(CircleShape).background(t.color.copy(alpha = 0.10f)))
+            Box(
+                Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(Brush.linearGradient(listOf(t.color.copy(alpha = 0.42f), t.color.copy(alpha = 0.14f))))
+                    .border(1.5.dp, t.color.copy(alpha = 0.55f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(t.icon, null, tint = t.color, modifier = Modifier.size(27.dp))
+            }
         }
         Spacer(Modifier.height(6.dp))
         Text(
@@ -173,13 +183,7 @@ private fun ToolRows(tools: List<ToolItem>, cols: Int = 4) {
 fun ToolsGrid(tools: List<ToolItem>, onAll: () -> Unit) {
     val c = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth()) {
-        Text(
-            stringResource(R.string.tools),
-            color = c.onSurfaceVariant,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(start = 20.dp, top = 2.dp, bottom = 4.dp)
-        )
+        SectionHeader(stringResource(R.string.tools), Icons.Rounded.GridView)
         val shown = if (tools.size <= 8) tools
             else tools.take(7) + ToolItem(Icons.TwoTone.Apps, R.string.tools_all, ToolColors.Slate, onClick = onAll)
         ToolRows(shown)
@@ -197,14 +201,20 @@ fun ToolsScreen(vm: AppViewModel) {
             listOf(R.string.sec_scan, R.string.sec_convert, R.string.sec_edit, R.string.sec_util).forEach { sec ->
                 val group = tools.filter { it.section == sec }
                 if (group.isNotEmpty()) {
-                    Text(
+                    // v3.12: each section is a card with an icon header (the new design)
+                    Spacer(Modifier.height(10.dp))
+                    SectionHeader(
                         stringResource(sec),
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = c.onBackground,
-                        modifier = Modifier.padding(start = 20.dp, top = 14.dp, bottom = 6.dp)
+                        when (sec) {
+                            R.string.sec_scan -> Icons.Rounded.CameraAlt
+                            R.string.sec_convert -> Icons.Rounded.SwapHoriz
+                            R.string.sec_edit -> Icons.Rounded.Edit
+                            else -> Icons.Rounded.Build
+                        }
                     )
-                    ToolRows(group)
+                    AppCard(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
+                        Box(Modifier.padding(vertical = 8.dp)) { ToolRows(group) }
+                    }
                 }
             }
         }

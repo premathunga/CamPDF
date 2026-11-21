@@ -133,11 +133,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             Screen.Review -> if (pages.isEmpty()) screen = Screen.Home else showDiscard = true
             Screen.SignPad, Screen.SignPlace -> screen = Screen.Review
             Screen.Export -> screen = Screen.Review
-            Screen.Viewer -> screen = Screen.Home
+            Screen.Viewer -> { val back = if (viewerFromExport) Screen.Export else viewerReturn; viewerFromExport = false; screen = back }
             Screen.Settings -> screen = Screen.Home
             Screen.PageTool -> { closePageTool(); screen = Screen.Home }
             Screen.IdIntro -> screen = Screen.Home
             Screen.Tools -> screen = Screen.Home
+            Screen.Documents -> screen = Screen.Home
             else -> Unit
         }
     }
@@ -206,6 +207,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openViewer(doc: DocItem) {
         viewerDoc = doc
+        viewerFromExport = false
+        // v3.12: back from the viewer returns to the list it was opened from (home or all documents)
+        viewerReturn = if (screen == Screen.Documents) Screen.Documents else Screen.Home
+        screen = Screen.Viewer
+    }
+
+    /** v3.11: "Open" on the PDF-created screen shows the PDF in CamPDF's own viewer; back returns to that screen. */
+    private var viewerFromExport = false
+    private var viewerReturn = Screen.Home
+
+    fun viewExported() {
+        val d = exported ?: return
+        viewerDoc = d
+        viewerFromExport = true
         screen = Screen.Viewer
     }
 
@@ -273,7 +288,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun importUris(uris: List<Uri>) {
-        if (screen == Screen.Home || screen == Screen.Tools) clearSession()
+        if (screen == Screen.Home || screen == Screen.Tools || screen == Screen.Documents) clearSession()
         viewModelScope.launch {
             busy = true
             val files = withContext(Dispatchers.IO) {

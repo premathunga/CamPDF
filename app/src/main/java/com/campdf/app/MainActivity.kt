@@ -220,6 +220,7 @@ private fun Root(vm: AppViewModel) {
         when (vm.screen) {
             Screen.Welcome -> WelcomeScreen { vm.completeWelcome() }
             Screen.Home -> HomeScreen(vm)
+            Screen.Documents -> HomeScreen(vm, full = true)
             Screen.Viewer -> ViewerScreen(vm)
             Screen.Camera -> CameraScreen(vm)
             Screen.Crop -> CropScreen(vm)

@@ -10,6 +10,11 @@
     <string name="get_started">ආරම්භ කරන්න</string>
     <string name="no_account">ගිණුමක් හෝ ලියාපදිංචියක් අවශ්‍ය නැත</string>
     <string name="all_documents">සියලු ලේඛන</string>
+    <string name="home_subtitle">ඔබේ ස්කෑන් කළ ලේඛන කළමනාකරණය කරන්න</string>
+    <string name="recent_documents">මෑත ලේඛන</string>
+    <string name="search_results">සෙවුම් ප්‍රතිඵල</string>
+    <string name="see_all">සියල්ල බලන්න</string>
+    <string name="import_short">රූප ගන්න</string>
     <string name="search_hint">ලේඛන සොයන්න…</string>
     <string name="scan">ස්කෑන් කරන්න</string>
     <string name="import_image">රූපයක් එක් කරන්න</string>
@@ -70,8 +75,6 @@
     <string name="redraw">නැවත අඳින්න</string>
     <string name="remove_signature">අත්සන ඉවත් කරන්න</string>
     <string name="apply">යොදන්න</string>
-    <string name="export_title">PDF අපනයනය</string>
-    <string name="pdf_created">PDF සාදන ලදි</string>
     <string name="file_name">ගොනු නම</string>
     <string name="save_to_phone">දුරකථනයට සුරකින්න</string>
     <string name="saved_ok">සුරැකිණි</string>
@@ -184,7 +187,7 @@
     <string name="id_banner_passport">විදේශ ගමන් බලපත්‍රය: photo පිටුව A4 පිටුවක නියම ප්‍රමාණයෙන් (125 × 88 mm). Print කරන්නේ 100% / Actual size ලෙසයි.</string>
     <string name="id_banner_cert">සහතිකය: සම්පූර්ණ ලේඛනය A4 පිටුවකට ගැළපේ.</string>
     <string name="id_banner_wm">Watermark: \"%1$s\"</string>
-    <string name="tools_all">සියල්ල</string>
+    <string name="tools_all">සියලු මෙවලම්</string>
     <string name="sec_scan">Scan සහ ඇතුළත් කිරීම</string>
     <string name="sec_convert">පරිවර්තනය</string>
     <string name="sec_edit">සංස්කරණය</string>
@@ -207,4 +210,11 @@
     <string name="page_sideways">මෙම පිටුව පැත්තට හැරී ඇති බව පෙනේ – Rotate ඔබන්න.</string>
     <string name="split">පොත</string>
     <string name="split_done">පොතේ මැදින් පිටු දෙකකට වෙන් කළා</string>
+    <string name="pdf_created_ok">PDF එක සාර්ථකව සැකසුණා!</string>
+    <string name="export_ready">ඔබේ ලේඛනය භාවිතයට සූදානම්</string>
+    <string name="export_quality">Export ගුණාත්මකභාවය</string>
+    <string name="export_quality_d">ඔබේ අවශ්‍යතාවයට ගැළපෙන ගුණාත්මකභාවය තෝරන්න</string>
+    <string name="q_high_sub">සියුම් විස්තර</string>
+    <string name="q_bal_sub">නිර්දේශිත</string>
+    <string name="q_compact_sub">කුඩාම ප්‍රමාණය</string>
 </resources>
